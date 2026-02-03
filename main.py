@@ -26,12 +26,6 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # --- Создание таблиц при запуске сервера ---
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    # ------------------------------------------
-
-    # ... ваш код Redis ...
     app.state.redis = await redis.from_url("redis://localhost:6379",
         decode_responses=True)
     await FastAPILimiter.init(app.state.redis)

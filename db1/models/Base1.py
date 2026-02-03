@@ -13,6 +13,7 @@ class User(Base):
     email = Column(String(255), unique=True, nullable=False)
     hashed_password = Column(String, nullable=False)
     role = Column(String(20), default="user")
+    phone = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     projects = relationship("Project", back_populates="owner")
     tasks = relationship("Task", back_populates="assignee")
