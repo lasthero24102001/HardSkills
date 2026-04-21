@@ -1,8 +1,8 @@
 from __future__ import annotations
 import logging
 import uuid
-from datetime import time
-
+import time
+import sentry_sdk
 import redis.asyncio as redis
 from contextlib import asynccontextmanager
 from fastapi import FastAPI,Request,status,Depends,HTTPException
@@ -38,7 +38,11 @@ async def get_redis(request: Request):
     return request.app.state.redis
 
 
-
+sentry_sdk.init(
+    dsn=settings.SENTRY_DSN,
+    traces_sample_rate=1.0,
+    profiles_sample_rate=1.0,
+)
 app=FastAPI(lifespan=lifespan)
 origins = [
     "http://localhost:3000",
@@ -58,11 +62,11 @@ add_pagination(app)
 @app.middleware("http")
 async def add_process_time_header(request: Request, call_next):
     request_id = str(uuid.uuid4())
+    sentry_sdk.set_tag("request_id", request_id)
     request.state.request_id = request_id
 
     start_time = time.time()
 
-    # Передаем запрос дальше по цепочке
     response = await call_next(request)
 
     process_time = time.time() - start_time
