@@ -1,5 +1,8 @@
 from __future__ import annotations
 import logging
+import uuid
+from datetime import time
+
 import redis.asyncio as redis
 from contextlib import asynccontextmanager
 from fastapi import FastAPI,Request,status,Depends,HTTPException
@@ -13,11 +16,10 @@ from db1.Security.security import UserPolicy,OAuth2PasswordRequestForm
 from db1.Database.database import engine,AsyncSession,get_db
 from db1.Filters.filters import UserFilter
 from db1.models.Base1 import User
+from db1.Database.database import retry, stop_after_attempt, wait_exponential, retry_if_exception_type,OperationalError
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
-
-
 from db1.models.Base1 import Base
-
 from config import settings
 
 logging.basicConfig(level=logging.INFO)
@@ -33,14 +35,47 @@ async def lifespan(app: FastAPI):
     await app.state.redis.close()
 
 async def get_redis(request: Request):
-    # Берем уже созданное соединение из lifespan
     return request.app.state.redis
 
 
 
-
 app=FastAPI(lifespan=lifespan)
+origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000"
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 add_pagination(app)
+
+
+@app.middleware("http")
+async def add_process_time_header(request: Request, call_next):
+    request_id = str(uuid.uuid4())
+    request.state.request_id = request_id
+
+    start_time = time.time()
+
+    # Передаем запрос дальше по цепочке
+    response = await call_next(request)
+
+    process_time = time.time() - start_time
+    response.headers["X-Request-ID"] = request_id
+    response.headers["X-Process-Time"] = f"{process_time:.4f}"
+
+    return response
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(1, min=1, max=4),
+    retry=retry_if_exception_type(OperationalError)
+)
 @app.post('/users/register', response_model=UserSimpleOut, status_code=status.HTTP_201_CREATED)
 async def register(user: CreateUser, db: AsyncSession = Depends(get_db)):
     auth = AuthService(db)
@@ -50,6 +85,13 @@ async def register(user: CreateUser, db: AsyncSession = Depends(get_db)):
         email=user.email
     )
     return new_user_obj
+
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(1, min=1, max=4),
+    retry=retry_if_exception_type(OperationalError)
+)
 @app.post('/users/login',response_model=TokenResponse,dependencies=[Depends(RateLimiter(times=6,minutes=60))])
 async def login(form_data:OAuth2PasswordRequestForm=Depends(),db:AsyncSession=Depends(get_db)):
     auth=AuthService(db)
@@ -58,6 +100,13 @@ async def login(form_data:OAuth2PasswordRequestForm=Depends(),db:AsyncSession=De
     refresh_token=create_refresh_token(user_id=user.id,role=user.role)
     await save_refresh_token(db,user_id=user.id,refresh_token=refresh_token)
     return TokenResponse(access_token=access_token,refresh_token=refresh_token,token_type="Bearer")
+
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(1, min=1, max=4),
+    retry=retry_if_exception_type(OperationalError)
+)
 @app.post('/users/refresh',response_model=TokenResponse)
 async def refresh(data:RefreshToken,db:AsyncSession=Depends(get_db)):
     try:
@@ -79,6 +128,12 @@ async def refresh(data:RefreshToken,db:AsyncSession=Depends(get_db)):
     new_refresh=create_refresh_token(user_id=user.id,role=user.role)
     await save_refresh_token(db,user_id=user.id,refresh_token=new_refresh)
     return TokenResponse(access_token=new_access,refresh_token=new_refresh,token_type="Bearer")
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(1, min=1, max=4),
+    retry=retry_if_exception_type(OperationalError)
+)
 @app.post('/users/logout')
 async def logout(data:RefreshToken,db:AsyncSession=Depends(get_db)):
     try:
@@ -91,24 +146,48 @@ async def logout(data:RefreshToken,db:AsyncSession=Depends(get_db)):
     await delete_refresh_token(db,user_id=user_id,refresh_token=data.refresh_token)
     await db.commit()
     return {'message':'Success'}
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(1, min=1, max=4),
+    retry=retry_if_exception_type(OperationalError)
+)
 @app.get('/users',response_model=Page[UserOut])
 async def read_users(db:AsyncSession=Depends(get_db),redis_conn=Depends(get_redis),user_filter:UserFilter=Depends(),current_user:User=Depends(get_current_user)):
     policy=UserPolicy(current_user)
     service=UserService(db,redis_conn,policy)
     user=await service.get_all(user_filter)
     return user
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(1, min=1, max=4),
+    retry=retry_if_exception_type(OperationalError)
+)
 @app.get('/users/{user_id}',response_model=UserOut)
 async def get_user(user_id:int,db:AsyncSession=Depends(get_db),redis_conn=Depends(get_redis),current_user:User=Depends(get_current_user)):
     policy=UserPolicy(current_user)
     service=UserService(db,redis_conn,policy)
     new_user=await service.get_by_id(user_id)
     return new_user
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(1, min=1, max=4),
+    retry=retry_if_exception_type(OperationalError)
+)
 @app.put('/users/{user_id}',response_model=UserOut)
 async def update_user(user_id:int,update_user1:UpdateUser,redis_conn=Depends(get_redis),db:AsyncSession=Depends(get_db),current_user:User=Depends(get_current_user)):
     policy=UserPolicy(current_user)
     service=UserService(db,redis_conn,policy)
     put_user=await service.update(user_id,update_user1)
     return put_user
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(1, min=1, max=4),
+    retry=retry_if_exception_type(OperationalError)
+)
 @app.delete('/users/{user_id}',response_model=UserOut)
 async def delete_user(user_id:int,db:AsyncSession=Depends(get_db),redis_conn=Depends(get_redis),current_user:User=Depends(get_current_user)):
     policy=UserPolicy(current_user)
