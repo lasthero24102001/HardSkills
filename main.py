@@ -5,6 +5,11 @@ import time
 import sentry_sdk
 import redis.asyncio as redis
 from contextlib import asynccontextmanager
+from sqlalchemy import text
+from prometheus_fastapi_instrumentator import Instrumentator
+from circuitbreaker import circuit
+from fastapi.responses import JSONResponse
+from db1.exception.exceptions import AppException
 from fastapi import FastAPI,Request,status,Depends,HTTPException
 from fastapi_limiter import FastAPILimiter
 from fastapi_limiter.depends import RateLimiter
@@ -28,8 +33,11 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    app.state.redis = await redis.from_url("redis://localhost:6379",
-        decode_responses=True)
+    # Используем settings.REDIS_URL вместо ручного написания адреса
+    app.state.redis = await redis.from_url(
+        settings.REDIS_URL, decode_responses=True,
+        socket_timeout=2, socket_connect_timeout=2,
+    )
     await FastAPILimiter.init(app.state.redis)
     yield
     await app.state.redis.close()
@@ -56,6 +64,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+Instrumentator().instrument(app).expose(app)
+
 add_pagination(app)
 
 
@@ -74,28 +86,62 @@ async def add_process_time_header(request: Request, call_next):
     response.headers["X-Process-Time"] = f"{process_time:.4f}"
 
     return response
+@app.exception_handler(AppException)
+async def app_exception_handler(request, exc: AppException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail}
+    )
 
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(1, min=1, max=4),
-    retry=retry_if_exception_type(OperationalError)
-)
-@app.post('/users/register', response_model=UserSimpleOut, status_code=status.HTTP_201_CREATED)
+
+@app.get('/health')
+async def health(db: AsyncSession = Depends(get_db), redis=Depends(get_redis)):
+    health_status = {"status": "ok", "db": "ok", "redis": "ok"}
+    status_code = 200
+
+    # проверяем БД
+    try:
+        await db.execute(text("SELECT 1"))
+    except Exception as e:
+        health_status["db"] = "error"
+        health_status["status"] = "error"
+        status_code = 503
+
+    # проверяем Redis
+    try:
+        await redis.ping()
+    except Exception as e:
+        health_status["redis"] = "error"
+        health_status["status"] = "error"
+        status_code = 503
+
+    return JSONResponse(
+        status_code=status_code,
+        content=health_status
+    )
+@circuit(failure_threshold=5, recovery_timeout=30)
+async def get_redis_data(redis, key):
+    return await redis.get(key)
+@circuit(failure_threshold=5, recovery_timeout=30)
+async def set_redis_data(redis, key, value, ex=None):
+    return await redis.set(key, value, ex=ex)
+
+# Circuit Breaker для БД
+@circuit(failure_threshold=5, recovery_timeout=30)
+async def execute_db_query(db, query):
+    return await db.execute(query)
+@app.post('/users/register', response_model=UserSimpleOut, status_code=status.HTTP_201_CREATED,dependencies=[Depends(RateLimiter(times=6,minutes=60))])
 async def register(user: CreateUser, db: AsyncSession = Depends(get_db)):
     auth = AuthService(db)
     new_user_obj = await auth.register_user(
         username=user.username,
         password=user.password,
-        email=user.email
+        email=user.email,
+        role=user.role
     )
     return new_user_obj
 
 
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(1, min=1, max=4),
-    retry=retry_if_exception_type(OperationalError)
-)
 @app.post('/users/login',response_model=TokenResponse,dependencies=[Depends(RateLimiter(times=6,minutes=60))])
 async def login(form_data:OAuth2PasswordRequestForm=Depends(),db:AsyncSession=Depends(get_db)):
     auth=AuthService(db)
@@ -106,12 +152,8 @@ async def login(form_data:OAuth2PasswordRequestForm=Depends(),db:AsyncSession=De
     return TokenResponse(access_token=access_token,refresh_token=refresh_token,token_type="Bearer")
 
 
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(1, min=1, max=4),
-    retry=retry_if_exception_type(OperationalError)
-)
-@app.post('/users/refresh',response_model=TokenResponse)
+
+@app.post('/users/refresh',response_model=TokenResponse,dependencies=[Depends(RateLimiter(times=6,minutes=60))])
 async def refresh(data:RefreshToken,db:AsyncSession=Depends(get_db)):
     try:
         payload=jwt.decode(data.refresh_token,settings.SECRET_KEY,algorithms=[settings.ALGORITHM])
@@ -133,11 +175,7 @@ async def refresh(data:RefreshToken,db:AsyncSession=Depends(get_db)):
     await save_refresh_token(db,user_id=user.id,refresh_token=new_refresh)
     return TokenResponse(access_token=new_access,refresh_token=new_refresh,token_type="Bearer")
 
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(1, min=1, max=4),
-    retry=retry_if_exception_type(OperationalError)
-)
+
 @app.post('/users/logout')
 async def logout(data:RefreshToken,db:AsyncSession=Depends(get_db)):
     try:
@@ -151,11 +189,7 @@ async def logout(data:RefreshToken,db:AsyncSession=Depends(get_db)):
     await db.commit()
     return {'message':'Success'}
 
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(1, min=1, max=4),
-    retry=retry_if_exception_type(OperationalError)
-)
+
 @app.get('/users',response_model=Page[UserOut])
 async def read_users(db:AsyncSession=Depends(get_db),redis_conn=Depends(get_redis),user_filter:UserFilter=Depends(),current_user:User=Depends(get_current_user)):
     policy=UserPolicy(current_user)
@@ -163,11 +197,6 @@ async def read_users(db:AsyncSession=Depends(get_db),redis_conn=Depends(get_redi
     user=await service.get_all(user_filter)
     return user
 
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(1, min=1, max=4),
-    retry=retry_if_exception_type(OperationalError)
-)
 @app.get('/users/{user_id}',response_model=UserOut)
 async def get_user(user_id:int,db:AsyncSession=Depends(get_db),redis_conn=Depends(get_redis),current_user:User=Depends(get_current_user)):
     policy=UserPolicy(current_user)
@@ -175,11 +204,6 @@ async def get_user(user_id:int,db:AsyncSession=Depends(get_db),redis_conn=Depend
     new_user=await service.get_by_id(user_id)
     return new_user
 
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(1, min=1, max=4),
-    retry=retry_if_exception_type(OperationalError)
-)
 @app.put('/users/{user_id}',response_model=UserOut)
 async def update_user(user_id:int,update_user1:UpdateUser,redis_conn=Depends(get_redis),db:AsyncSession=Depends(get_db),current_user:User=Depends(get_current_user)):
     policy=UserPolicy(current_user)
@@ -187,11 +211,6 @@ async def update_user(user_id:int,update_user1:UpdateUser,redis_conn=Depends(get
     put_user=await service.update(user_id,update_user1)
     return put_user
 
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(1, min=1, max=4),
-    retry=retry_if_exception_type(OperationalError)
-)
 @app.delete('/users/{user_id}',response_model=UserOut)
 async def delete_user(user_id:int,db:AsyncSession=Depends(get_db),redis_conn=Depends(get_redis),current_user:User=Depends(get_current_user)):
     policy=UserPolicy(current_user)
