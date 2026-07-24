@@ -25,6 +25,7 @@ from db1.Database.database import retry, stop_after_attempt, wait_exponential, r
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
 from db1.models.Base1 import Base
+from db1.tasks.task import send_welcome_email
 from config import settings
 
 logging.basicConfig(level=logging.INFO)
@@ -41,6 +42,7 @@ async def lifespan(app: FastAPI):
     await FastAPILimiter.init(app.state.redis)
     yield
     await app.state.redis.close()
+    await engine.dispose()
 
 async def get_redis(request: Request):
     return request.app.state.redis
@@ -139,6 +141,7 @@ async def register(user: CreateUser, db: AsyncSession = Depends(get_db)):
         email=user.email,
         role=user.role
     )
+    send_welcome_email.delay(user_id=new_user_obj.id, email=new_user_obj.email)
     return new_user_obj
 
 
