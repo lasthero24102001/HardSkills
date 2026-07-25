@@ -1,11 +1,11 @@
-from pydantic import BaseModel,constr,Field,ConfigDict
+from pydantic import BaseModel,Field,ConfigDict,EmailStr
 from typing import Optional,List
 from datetime import datetime
 
 class CreateUser(BaseModel):
     username:str
-    email:str
-    password:str=constr(min_length=6,max_length=10)
+    email:EmailStr
+    password: str = Field(min_length=6, max_length=10)
     role:str="user"
 class CreateProject(BaseModel):
     title:str
@@ -51,7 +51,7 @@ class ProjectOut(BaseModel):
 class UserSimpleOut(BaseModel):
     id: int
     username: str
-    email: str
+    email: EmailStr
     role: str
     created_at: datetime
 
@@ -59,7 +59,7 @@ class UserSimpleOut(BaseModel):
 class UserOut(BaseModel):
     id:int
     username:str
-    email:str
+    email:EmailStr
     role:str
     created_at:Optional[datetime]=None
     projects:List[ProjectOut]=Field(default_factory=list)
@@ -70,7 +70,7 @@ class UserOut(BaseModel):
 class UpdateUser(BaseModel):
     username:Optional[str]=None
     password:Optional[str]=None
-    email:Optional[str]=None
+    email:Optional[EmailStr]=None
     created_at:Optional[datetime]=None
 
     model_config = ConfigDict(from_attributes=True)

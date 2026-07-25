@@ -1,6 +1,6 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from config import settings
-from datetime import datetime,timedelta
+from datetime import datetime,timedelta,timezone
 from jose import jwt,JWTError
 from db1.models.Base1 import RefreshTokenDB,User
 from db1.Security.security import Utils,oauth2_scheme
@@ -11,20 +11,22 @@ from db1.Database.database import get_db
 
 
 def create_access_token(user_id:int,role:str):
-    payload = {'sub':str(user_id),'role':role,'type':'access','exp':datetime.utcnow()+timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES) }
+    payload = {'sub':str(user_id),'role':role,'type':'access','exp':datetime.now(timezone.utc)+timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES) }
     return jwt.encode(payload,settings.SECRET_KEY,algorithm=settings.ALGORITHM)
 def create_refresh_token(user_id:int,role:str):
-    payload={'sub':str(user_id),'role':role,'type':'refresh','exp':datetime.utcnow()+timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)}
+    payload={'sub':str(user_id),'role':role,'type':'refresh','exp':datetime.now(timezone.utc)+timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)}
     return jwt.encode(payload,settings.SECRET_KEY,algorithm=settings.ALGORITHM)
 async def save_refresh_token(db:AsyncSession,user_id:int,refresh_token:str):
     hashed_refresh=Utils.password_hash(refresh_token)
-    db_token=RefreshTokenDB(user_id=user_id,token=hashed_refresh,expires_at=datetime.utcnow()+timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS))
+    db_token=RefreshTokenDB(user_id=user_id,token=hashed_refresh,expires_at=datetime.now(timezone.utc)+timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS))
     db.add(db_token)
     await db.commit()
     await db.refresh(db_token)
     return db_token
 async def delete_refresh_token(db:AsyncSession,user_id:int,refresh_token:str):
-    result=await db.execute(select(RefreshTokenDB).where(RefreshTokenDB.user_id == user_id))
+    result = await db.execute(
+            select(RefreshTokenDB).where(RefreshTokenDB.user_id == int(user_id))
+        )
     user=result.scalars().all()
     for token1 in user:
         if Utils.password_verify(refresh_token,token1.token):
@@ -49,7 +51,7 @@ def decode_token(token:str):
 async def get_current_user(token:str=Depends(oauth2_scheme),db:AsyncSession=Depends(get_db)):
     try:
         payload=decode_token(token)
-        user_id=payload['sub']
+        user_id=int(payload['sub'])
         if not user_id:
             raise HTTPException(status_code=404,detail="Token is invalid")
         if payload['type'] != 'access':

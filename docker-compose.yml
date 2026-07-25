@@ -9,35 +9,102 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
     ports:
-      # Внешний:Внутренний
       - "5432:5432"
     volumes:
-      # Сохраняет данные базы на вашем компьютере, чтобы они не пропали при удалении контейнера
       - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   redis:
     image: redis:7-alpine
     restart: always
     ports:
       - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   app:
-    # Docker будет искать Dockerfile в текущей папке и соберет образ приложения
     build: .
-    # *** ИСПРАВЛЕННАЯ КОМАНДА ЗАПУСКА ***
-    command: sh -c "sh wait-for.sh db:5432 redis:6379 -- uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
+    command: sh -c "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000"
     ports:
       - "8000:8000"
     volumes:
-      # Монтирует код с вашего компьютера внутрь контейнера для горячей перезагрузки (при --reload)
       - .:/app
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379
     env_file:
-      # Использует ваш локальный .env файл для переменных окружения
       - .env
     depends_on:
-      # Гарантирует, что база и Redis запустятся раньше приложения Python
-      - db
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  prometheus:
+    image: prom/prometheus:latest
+    restart: always
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    depends_on:
+      - app
+
+  grafana:
+    image: grafana/grafana:latest
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: REDACTED
+    volumes:
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+
+  celery_worker:
+    build: .
+    command: celery -A celery_app worker --loglevel=info -P gevent
+    volumes:
+      - .:/app
+    environment:
+      REDIS_URL: redis://redis:6379
+    env_file:
+      - .env
+    depends_on:
       - redis
+      - app
+
+  celery_beat:
+    build: .
+    command: celery -A celery_app beat --loglevel=info
+    volumes:
+      - .:/app
+    environment:
+      REDIS_URL: redis://redis:6379
+    env_file:
+      - .env
+    depends_on:
+      - redis
+      - celery_worker
+
+  flower:
+    build: .
+    command: celery -A celery_app flower --port=5555
+    ports:
+      - "5555:5555"
+    env_file:
+      - .env
+    depends_on:
+      - celery_worker
 
 volumes:
   db_data:
+  grafana_data:

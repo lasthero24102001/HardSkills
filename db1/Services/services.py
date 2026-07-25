@@ -3,12 +3,18 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from db1.models.Base1 import User,Project,Task
 from db1.Security.security import Utils
-from fastapi import HTTPException
 from db1.Security.security import BaseService,CreateService,BaseProjectPolicy,BaseUserPolicy,BaseTaskPolicy
 from sqlalchemy.orm import selectinload,joinedload
 from db1.PydanticModels.Pydantic import *
 from config import settings
 from db1.Filters.filters import UserFilter,ProjectFilter,TaskFilter
+from db1.exception.exceptions import UserNotFound, UserAlreadyExists, UserForbidden, EmailAlreadyExists, \
+    InvalidCredentials, ProjectNotFound, TaskNotFound, TaskForbidden, ProjectForbidden, ProjectAlreadyExists, \
+    TaskAlreadyExists
+from db1.repository.repositories import UserRepository, ProjectRepository, TaskRepository
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from sqlalchemy.exc import OperationalError
+
 from fastapi_pagination.ext.sqlalchemy import paginate
 
 
@@ -16,74 +22,89 @@ from fastapi_pagination.ext.sqlalchemy import paginate
 class AuthService:
     def __init__(self,db:AsyncSession):
         self.db = db
-
-    async def register_user(self, username: str, password: str, email: str):
-        try:
-            # Существующие проверки
-            result = await self.db.execute(select(User).where(User.username == username))
-            user = result.scalars().first()
-            if user:
-                raise HTTPException(status_code=409, detail="User already exists")
-
-            result1 = await self.db.execute(select(User).where(User.email == email))
-            user1 = result1.scalars().first()
-            if user1:
-                raise HTTPException(status_code=409, detail="User already exists")
-
-            # Создание пользователя
-            hashed_password = Utils.password_hash(password)
-            new_user = User(
-                username=username,
-                email=email,
-                hashed_password=hashed_password,
-                role='user'
-            )
-            self.db.add(new_user)
-            await self.db.commit()
-            await self.db.refresh(new_user)
-            return new_user
-
-        except Exception as e:
-            print(f"DEBUG Ошибка в register_user: {e}")  # Вывод в консоль
-            await self.db.rollback()
-            raise HTTPException(status_code=500, detail="Internal server error")
+        self.user_repo=UserRepository(db)
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(1, min=1, max=4),
+        retry=retry_if_exception_type(OperationalError)
+    )
+    async def register_user(self, username: str, password: str, email: str,role:str="user"):
+        existing_user = await self.user_repo.get_by_username(username)
+        if existing_user:
+            raise UserAlreadyExists()
+        existing_email = await self.user_repo.get_by_email(email)
+        if existing_email:
+            raise EmailAlreadyExists()
+        hashed_password = Utils.password_hash(password)
+        new_user = User(username=username, email=email, hashed_password=hashed_password, role=role)
+        self.db.add(new_user)
+        await self.db.commit()
+        await self.db.refresh(new_user)
+        return new_user
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(1, min=1, max=4),
+        retry=retry_if_exception_type(OperationalError)
+    )
     async def login_user(self,username:str,password:str):
-        result=await self.db.execute(select(User).where(User.username==username))
-        user=result.scalars().first()
+        user=await self.user_repo.get_by_username(username)
         if not user or not Utils.password_verify(password,user.hashed_password):
-            raise HTTPException(status_code=409,detail="Incorrect password")
+            raise InvalidCredentials()
         return user
 class UserService(BaseService):
     def __init__(self,db:AsyncSession,redis_conn,policy:BaseUserPolicy):
         self.db = db
         self.redis=redis_conn
         self.policy=policy
+        self.user_repo=UserRepository(db)
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(1, min=1, max=4),
+        retry=retry_if_exception_type(OperationalError)
+    )
     async def get_all(self,user_filter:UserFilter):
-        result=select(User).options(selectinload(User.projects),selectinload(User.tasks),selectinload(User.refresh_tokens))
+        result=select(User)
+        if self.policy.user.role != "admin":
+            result = result.where(User.id == self.policy.user.id)
         user=user_filter.filter(result)
         return paginate(self.db,user)
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(1, min=1, max=4),
+        retry=retry_if_exception_type(OperationalError)
+    )
     async def get_by_id(self,user_id:int):
-        cache_key=f'user:{user_id}'
-        cache_user=await self.redis.get(cache_key)
-        if cache_user:
-            return json.loads(cache_user)
-        result=await self.db.execute(select(User).options(selectinload(User.projects),selectinload(User.tasks),selectinload(User.refresh_tokens)).where(User.id == user_id))
-        user=result.scalars().first()
+        user=await self.user_repo.get_by_id(user_id)
         if not user:
-            raise HTTPException(status_code=404,detail="User not found")
+            raise UserNotFound()
         if not self.policy.can_read(user):
-            raise HTTPException(status_code=401,detail="Not authorized")
+            raise UserForbidden()
+        cache_key = f'user:{user_id}'
+        try:
+            cache_user=await self.redis.get(cache_key)
+            if cache_user:
+               return json.loads(cache_user)
+        except Exception:
+            pass
         user_data = UserOut.model_validate(user)
         user_json=user_data.model_dump()
-        await self.redis.set(cache_key,user_data.model_dump_json(),ex=settings.REDIS_TIME)
+        try:
+             await self.redis.set(cache_key,user_data.model_dump_json(),ex=settings.REDIS_TIME)
+        except Exception:
+            pass
         return user_json
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(1, min=1, max=4),
+        retry=retry_if_exception_type(OperationalError)
+    )
     async def update(self,user_id:int,user_update:UpdateUser):
-        result=await self.db.execute(select(User).where(User.id == user_id))
-        user=result.scalars().first()
+        user=await self.user_repo.get_by_id(user_id)
         if not user:
-            raise HTTPException(status_code=404,detail="User not found")
+            raise UserNotFound()
         if not self.policy.can_update(user):
-            raise HTTPException(status_code=403,detail="Forbidden")
+            raise UserForbidden()
         if user_update.username is not None:
             user.username=user_update.username
         if user_update.password is not None:
@@ -96,13 +117,17 @@ class UserService(BaseService):
         await self.redis.delete(f'user:{user_id}')
         await self.db.refresh(user)
         return user
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(1, min=1, max=4),
+        retry=retry_if_exception_type(OperationalError)
+    )
     async def delete(self,user_id:int):
-        result=await self.db.execute(select(User).where(User.id == user_id))
-        user=result.scalars().first()
+        user=await self.user_repo.get_by_id(user_id)
         if not user:
-            raise HTTPException(status_code=404,detail="User not found")
+            raise UserNotFound()
         if not self.policy.can_delete(user):
-            raise HTTPException(status_code=403,detail="Forbidden")
+            raise UserForbidden()
         await self.db.delete(user)
         await self.db.commit()
         await self.redis.delete(f'user:{user_id}')
@@ -113,49 +138,69 @@ class ProjectService(BaseService, CreateService):
         self.db = db
         self.redis = redis_conn
         self.policy = policy
-
+        self.project_repo=ProjectRepository(db)
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(1, min=1, max=4),
+        retry=retry_if_exception_type(OperationalError)
+    )
     async def get_all(self, project_filter: ProjectFilter):
-        result = select(Project).options(joinedload(Project.owner), selectinload(Project.tasks))
+        result = select(Project)
+        if self.policy.user.role != "admin":
+            result = result.where(Project.owner_id == self.policy.user.id)
         project = project_filter.filter(result)
         return paginate(self.db, project)
-
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(1, min=1, max=4),
+        retry=retry_if_exception_type(OperationalError)
+    )
     async def get_by_id(self, project_id: int):
-        cache_key = f'project:{project_id}'
-        cache_project = await self.redis.get(cache_key)
-        if cache_project:
-            return json.loads(cache_project)
-        result = await self.db.execute(
-            select(Project).options(joinedload(Project.owner), selectinload(Project.tasks)).where(
-                Project.id == project_id))
-        project = result.scalars().first()
+        project = await self.project_repo.get_project_id(project_id)
         if not project:
-            raise HTTPException(status_code=404, detail="Project not found")
+            raise ProjectNotFound()
         if not self.policy.can_read(project):
-            raise HTTPException(status_code=403, detail="Forbidden")
+            raise ProjectForbidden()
+        cache_key = f'project:{project_id}'
+        try:
+            cache_project = await self.redis.get(cache_key)
+            if cache_project:
+               return json.loads(cache_project)
+        except Exception:
+            pass
         project_data = ProjectOut.model_validate(project).model_dump_json()
-        await self.redis.set(cache_key, project_data, ex=settings.REDIS_TIME)
+        try:
+            await self.redis.set(cache_key, project_data, ex=settings.REDIS_TIME)
+        except Exception:
+            pass
         return project_data
-
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(1, min=1, max=4),
+        retry=retry_if_exception_type(OperationalError)
+    )
     async def create(self, project_in: CreateProject):
-        result = await self.db.execute(select(Project).where(Project.title == project_in.title))
-        project = result.scalars().first()
-        if not project:
-            raise HTTPException(status_code=404, detail="Project not found")
+        project = await self.project_repo.get_title(project_in.title)
+        if project:
+            raise ProjectAlreadyExists()
         if not self.policy.can_create():
-            raise HTTPException(status_code=403, detail="Forbidden")
+            raise ProjectForbidden()
         new_project = Project(title=project_in.title, owner_id=self.policy.user.id, created_at=project_in.created_at)
         self.db.add(new_project)
         await self.db.commit()
         await self.db.refresh(new_project)
         return new_project
-
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(1, min=1, max=4),
+        retry=retry_if_exception_type(OperationalError)
+    )
     async def update(self, project_id: int, project_update: UpdateProject):
-        result = await self.db.execute(select(Project).where(Project.id == project_id))
-        project = result.scalars().first()
+        project = await self.project_repo.get_project_id(project_id)
         if not project:
-            raise HTTPException(status_code=404, detail="Project not found")
+            raise ProjectNotFound()
         if not self.policy.can_update(project):
-            raise HTTPException(status_code=403, detail="Forbidden")
+            raise ProjectForbidden()
         if project_update.title is not None:
             project.title = project_update.title
         if project_update.created_at is not None:
@@ -164,14 +209,17 @@ class ProjectService(BaseService, CreateService):
         await self.redis.delete(f'project:{project_id}')
         await self.db.refresh(project)
         return project
-
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(1, min=1, max=4),
+        retry=retry_if_exception_type(OperationalError)
+    )
     async def delete(self, project_id: int):
-        result = await self.db.execute(select(Project).where(Project.id == project_id))
-        project = result.scalars().first()
+        project = await self.project_repo.get_project_id(project_id)
         if not project:
-            raise HTTPException(status_code=404, detail="Project not found")
+            raise ProjectNotFound()
         if not self.policy.can_delete(project):
-            raise HTTPException(status_code=403, detail="Forbidden")
+            raise ProjectForbidden()
         await self.db.delete(project)
         await self.db.commit()
         await self.redis.delete(f'project:{project_id}')
@@ -181,52 +229,79 @@ class TaskService(BaseService,CreateService):
         self.db = db
         self.redis=redis_conn
         self.policy=policy
+        self.task_repo=TaskRepository(db)
+        self.project_repo=ProjectRepository(db)
+        self.user_repo=UserRepository(db)
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(1, min=1, max=4),
+        retry=retry_if_exception_type(OperationalError)
+    )
     async def get_all(self,task_filter:TaskFilter):
-        result=select(Task).options(joinedload(Task.assignee),joinedload(Task.project))
+        result=select(Task)
+        if self.policy.user.role != "admin":
+            result=result.where(Task.assignee_id == self.policy.user.id)
         task=task_filter.filter(result)
         return paginate(self.db,task)
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(1, min=1, max=4),
+        retry=retry_if_exception_type(OperationalError)
+    )
     async def get_by_id(self,task_id:int):
-        cache_key=f'task:{task_id}'
-        cache_task=await self.redis.get(cache_key)
-        if cache_task:
-            return json.loads(cache_task)
-        result=await self.db.execute(select(Task).options(joinedload(Task.assignee),joinedload(Task.project)).where(Task.id == task_id))
-        task=result.scalars().first()
+        task=await self.task_repo.get_by_id(task_id)
         if not task:
-            raise HTTPException(status_code=404,detail="Task not found")
+            raise TaskNotFound()
         if not self.policy.can_read(task):
-            raise HTTPException(status_code=403,detail="Forbidden")
+            raise TaskForbidden()
+        cache_key=f'task:{task_id}'
+        try:
+            cache_task=await self.redis.get(cache_key)
+            if cache_task:
+                return json.loads(cache_task)
+        except Exception:
+            pass
         task_pydantic=TaskOut.model_validate(task)
         task_data=task_pydantic.model_dump()
-        await self.redis.set(cache_key,task_pydantic.model_dump_json(),ex=settings.REDIS_TIME)
+        try:
+           await self.redis.set(cache_key,task_pydantic.model_dump_json(),ex=settings.REDIS_TIME)
+        except Exception:
+            pass
         return task_data
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(1, min=1, max=4),
+        retry=retry_if_exception_type(OperationalError)
+    )
     async def create(self,task_in:CreateTask):
-        result=await self.db.execute(select(Task).where(Task.title == task_in.title))
-        task=result.scalars().first()
+        task=await self.task_repo.get_by_title_task(task_in.title)
         if task:
-            raise HTTPException(status_code=409,detail="Task already exists")
+            raise TaskAlreadyExists()
         if not self.policy.can_create():
-            raise HTTPException(status_code=403,detail="Forbidden")
-        result1=await self.db.execute(select(Project).where(Project.id == task_in.project_id))
-        project=result1.scalars().first()
-        if project:
-            raise HTTPException(status_code=404,detail="Project with this task already exists")
-        result3=await self.db.execute(select(User).where(User.id == task_in.assignee_id))
-        user=result3.scalars().first()
+            raise TaskForbidden()
+        project=await self.project_repo.get_project_title_to_task(task_in.project_id)
+        if not project:
+            raise ProjectNotFound()
+        user=await self.user_repo.user_task_assignee_id(task_in.assignee_id)
         if not user:
-            raise HTTPException(status_code=404,detail="User not found")
+            raise UserNotFound()
         new_task=Task(title=task_in.title,project_id=task_in.project_id,assignee_id=task_in.assignee_id or self.policy.user.id,created_at=task_in.created_at)
         self.db.add(new_task)
         await self.db.commit()
         await self.db.refresh(new_task)
         return new_task
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(1, min=1, max=4),
+        retry=retry_if_exception_type(OperationalError)
+    )
     async def update(self,task_id:int,task_in:UpdateTask):
-        result=await self.db.execute(select(Task).where(Task.id == task_id))
-        task=result.scalars().first()
+        task=await self.task_repo.get_by_id(task_id)
         if not task:
-            raise HTTPException(status_code=404,detail="Task not found")
+            raise TaskNotFound()
         if not self.policy.can_update(task):
-            raise HTTPException(status_code=403,detail="Forbidden")
+            raise TaskForbidden()
         if task_in.title is not None:
             task.title=task_in.title
         if task_in.created_at is not None:
@@ -235,13 +310,17 @@ class TaskService(BaseService,CreateService):
         await self.redis.delete(f'task:{task_id}')
         await self.db.refresh(task)
         return task
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(1, min=1, max=4),
+        retry=retry_if_exception_type(OperationalError)
+    )
     async def delete(self,task_id:int):
-        result=await self.db.execute(select(Task).where(Task.id == task_id))
-        task=result.scalars().first()
+        task=await self.task_repo.get_by_id(task_id)
         if not task:
-            raise HTTPException(status_code=404,detail="Task not found")
+            raise TaskNotFound()
         if not self.policy.can_delete(task):
-            raise HTTPException(status_code=403,detail="Forbidden")
+            raise TaskForbidden()
         await self.db.delete(task)
         await self.db.commit()
         await self.redis.delete(f'task:{task_id}')

@@ -1,23 +1,19 @@
-# Используем официальный образ Python
-FROM python:3.13-alpine
+FROM python:3.13-slim
 
-# Устанавливаем рабочую директорию
+# Устанавливаем системные зависимости, необходимые для компиляции gssapi и других пакетов
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    python3-dev \
+    libkrb5-dev \
+    comerr-dev \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
-# Обновляем список пакетов
-RUN apk update
 
-# Устанавливаем официальный пакет pygame и его зависимости
-RUN apk add --no-cache py3-pygame
-
-# Копируем файл с зависимостями (убедитесь, что requirements.txt существует!)
 COPY requirements.txt .
-
-# Устанавливаем остальные зависимости Python, которых нет в пакете (FastAPI, SQLAlchemy и т.д.)
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Копируем весь остальной код в контейнер
 COPY . .
 
-# Команда для запуска Uvicorn
-CMD ["uvicorn", "db1.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

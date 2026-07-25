@@ -13,7 +13,6 @@ class User(Base):
     email = Column(String(255), unique=True, nullable=False)
     hashed_password = Column(String, nullable=False)
     role = Column(String(20), default="user")
-    phone = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     projects = relationship("Project", back_populates="owner")
     tasks = relationship("Task", back_populates="assignee")
@@ -54,6 +53,7 @@ class RefreshTokenDB(Base):
 
     id = Column(Integer, primary_key=True)
     token = Column(String, nullable=False)
-    user_id = Column(Integer, ForeignKey("users.id"), unique=True)
-    expires_at = Column(DateTime, nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    # в Base1.py
+    expires_at = Column(DateTime(timezone=True), nullable=False)
     user = relationship("User", back_populates="refresh_tokens")
