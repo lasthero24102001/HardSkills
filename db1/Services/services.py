@@ -115,7 +115,7 @@ class UserService(BaseService):
             user.created_at=user_update.created_at
         await self.db.commit()
         await self.redis.delete(f'user:{user_id}')
-        await self.db.refresh(user)
+        user = await self.user_repo.get_by_id(user_id)
         return user
     @retry(
         stop=stop_after_attempt(3),

@@ -17,7 +17,7 @@ celery_app.conf.broker_transport_options = {"visibility_timeout": 3600}
 
 celery_app.conf.beat_schedule = {
     "send-morning-notifications": {
-        "task": "db1.tasks.tasks.send_morning_notification",
+        "task": "db1.tasks.task.send_morning_notification",
         "schedule": crontab(hour=9, minute=0),
     }
 }

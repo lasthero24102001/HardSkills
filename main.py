@@ -56,7 +56,10 @@ sentry_sdk.init(
 app=FastAPI(lifespan=lifespan)
 origins = [
     "http://localhost:3000",
-    "http://127.0.0.1:3000"
+    "http://127.0.0.1:3000",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+    "null",
 ]
 
 app.add_middleware(
@@ -132,7 +135,7 @@ async def set_redis_data(redis, key, value, ex=None):
 @circuit(failure_threshold=5, recovery_timeout=30)
 async def execute_db_query(db, query):
     return await db.execute(query)
-@app.post('/users/register', response_model=UserSimpleOut, status_code=status.HTTP_201_CREATED,dependencies=[Depends(RateLimiter(times=6,minutes=60))])
+@app.post('/users/register', response_model=UserSimpleOut, status_code=status.HTTP_201_CREATED,dependencies=[Depends(RateLimiter(times=6,seconds=60))])
 async def register(user: CreateUser, db: AsyncSession = Depends(get_db)):
     auth = AuthService(db)
     new_user_obj = await auth.register_user(
@@ -145,7 +148,7 @@ async def register(user: CreateUser, db: AsyncSession = Depends(get_db)):
     return new_user_obj
 
 
-@app.post('/users/login',response_model=TokenResponse,dependencies=[Depends(RateLimiter(times=6,minutes=60))])
+@app.post('/users/login',response_model=TokenResponse,dependencies=[Depends(RateLimiter(times=6,seconds=60))])
 async def login(form_data:OAuth2PasswordRequestForm=Depends(),db:AsyncSession=Depends(get_db)):
     auth=AuthService(db)
     user=await auth.login_user(username=form_data.username,password=form_data.password)
@@ -156,7 +159,7 @@ async def login(form_data:OAuth2PasswordRequestForm=Depends(),db:AsyncSession=De
 
 
 
-@app.post('/users/refresh',response_model=TokenResponse,dependencies=[Depends(RateLimiter(times=6,minutes=60))])
+@app.post('/users/refresh',response_model=TokenResponse,dependencies=[Depends(RateLimiter(times=6,seconds=60))])
 async def refresh(data:RefreshToken,db:AsyncSession=Depends(get_db)):
     try:
         payload=jwt.decode(data.refresh_token,settings.SECRET_KEY,algorithms=[settings.ALGORITHM])
