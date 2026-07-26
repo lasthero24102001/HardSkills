@@ -6,6 +6,7 @@ import sentry_sdk
 import redis.asyncio as redis
 from contextlib import asynccontextmanager
 from sqlalchemy import text
+from fastapi.responses import Response
 from prometheus_fastapi_instrumentator import Instrumentator
 from circuitbreaker import circuit
 from fastapi.responses import JSONResponse
@@ -26,6 +27,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
 from db1.models.Base1 import Base
 from db1.tasks.task import send_welcome_email
+from db1.Services.services import ProjectService, TaskService
+from db1.Security.security import ProjectPolicy, TaskPolicy
+from db1.Filters.filters import ProjectFilter, TaskFilter
+from db1.repository.repositories import ProjectRepository
+from db1.repository.repositories import TaskRepository
+
+from db1.PydanticModels.Pydantic import CreateProject, UpdateProject, ProjectOut, CreateTask, UpdateTask, TaskOut
 from config import settings
 
 logging.basicConfig(level=logging.INFO)
@@ -149,12 +157,28 @@ async def register(user: CreateUser, db: AsyncSession = Depends(get_db)):
 
 
 @app.post('/users/login',response_model=TokenResponse,dependencies=[Depends(RateLimiter(times=6,seconds=60))])
-async def login(form_data:OAuth2PasswordRequestForm=Depends(),db:AsyncSession=Depends(get_db)):
+async def login(response: Response,form_data:OAuth2PasswordRequestForm=Depends(),db:AsyncSession=Depends(get_db)):
     auth=AuthService(db)
     user=await auth.login_user(username=form_data.username,password=form_data.password)
     access_token=create_access_token(user_id=user.id,role=user.role)
     refresh_token=create_refresh_token(user_id=user.id,role=user.role)
     await save_refresh_token(db,user_id=user.id,refresh_token=refresh_token)
+    response.set_cookie(
+        key="access_token",
+        value=access_token,
+        httponly=True,
+        secure=False,  # True в продакшене с HTTPS
+        samesite="strict",
+        max_age=1800
+    )
+    response.set_cookie(
+        key="refresh_token",
+        value=refresh_token,
+        httponly=True,
+        secure=False,
+        samesite="strict",
+        max_age=60 * 60 * 24 * 30
+    )
     return TokenResponse(access_token=access_token,refresh_token=refresh_token,token_type="Bearer")
 
 
@@ -203,11 +227,11 @@ async def read_users(db:AsyncSession=Depends(get_db),redis_conn=Depends(get_redi
     user=await service.get_all(user_filter)
     return user
 
-@app.get('/users/{user_id}',response_model=UserOut)
-async def get_user(user_id:int,db:AsyncSession=Depends(get_db),redis_conn=Depends(get_redis),current_user:User=Depends(get_current_user)):
-    policy=UserPolicy(current_user)
-    service=UserService(db,redis_conn,policy)
-    new_user=await service.get_by_id(user_id)
+@app.get('/users/{user_id}', response_model=UserOut)
+async def get_user(user_id: int, db: AsyncSession = Depends(get_db), redis_conn=Depends(get_redis), current_user: User = Depends(get_current_user)):
+    policy = UserPolicy(current_user)
+    service = UserService(db, redis_conn, policy)
+    new_user = await service.get_by_id(user_id)
     return new_user
 
 @app.put('/users/{user_id}',response_model=UserOut)
@@ -224,7 +248,70 @@ async def delete_user(user_id:int,db:AsyncSession=Depends(get_db),redis_conn=Dep
     delete_user1=await service.delete(user_id)
     return delete_user1
 
+@app.post('/projects', response_model=ProjectOut, status_code=status.HTTP_201_CREATED)
+async def create_project(project: CreateProject, db: AsyncSession = Depends(get_db), redis_conn=Depends(get_redis), current_user: User = Depends(get_current_user)):
+    policy = ProjectPolicy(current_user)
+    service = ProjectService(db, redis_conn, policy)
+    new_project = await service.create(project)
+    repo = ProjectRepository(db)
+    return await repo.get_project_id(new_project.id)
 
+@app.get('/projects', response_model=Page[ProjectOut])
+async def get_projects(db: AsyncSession = Depends(get_db), redis_conn=Depends(get_redis), project_filter: ProjectFilter = Depends(), current_user: User = Depends(get_current_user)):
+    policy = ProjectPolicy(current_user)
+    service = ProjectService(db, redis_conn, policy)
+    return await service.get_all(project_filter)
+
+@app.get('/projects/{project_id}', response_model=ProjectOut)
+async def get_project(project_id: int, db: AsyncSession = Depends(get_db), redis_conn=Depends(get_redis), current_user: User = Depends(get_current_user)):
+    policy = ProjectPolicy(current_user)
+    service = ProjectService(db, redis_conn, policy)
+    return await service.get_by_id(project_id)
+
+@app.put('/projects/{project_id}', response_model=ProjectOut)
+async def update_project(project_id: int, project: UpdateProject, db: AsyncSession = Depends(get_db), redis_conn=Depends(get_redis), current_user: User = Depends(get_current_user)):
+    policy = ProjectPolicy(current_user)
+    service = ProjectService(db, redis_conn, policy)
+    return await service.update(project_id, project)
+
+@app.delete('/projects/{project_id}', response_model=ProjectOut)
+async def delete_project(project_id: int, db: AsyncSession = Depends(get_db), redis_conn=Depends(get_redis), current_user: User = Depends(get_current_user)):
+    policy = ProjectPolicy(current_user)
+    service = ProjectService(db, redis_conn, policy)
+    return await service.delete(project_id)
+
+# =================== TASKS ===================
+
+@app.post('/tasks', response_model=TaskOut, status_code=status.HTTP_201_CREATED)
+async def create_task(task: CreateTask, db: AsyncSession = Depends(get_db), redis_conn=Depends(get_redis), current_user: User = Depends(get_current_user)):
+    policy = TaskPolicy(current_user)
+    service = TaskService(db, redis_conn, policy)
+    new_task = await service.create(task)
+    repo = TaskRepository(db)
+    return await repo.get_by_id(new_task.id)
+@app.get('/tasks', response_model=Page[TaskOut])
+async def get_tasks(db: AsyncSession = Depends(get_db), redis_conn=Depends(get_redis), task_filter: TaskFilter = Depends(), current_user: User = Depends(get_current_user)):
+    policy = TaskPolicy(current_user)
+    service = TaskService(db, redis_conn, policy)
+    return await service.get_all(task_filter)
+
+@app.get('/tasks/{task_id}', response_model=TaskOut)
+async def get_task(task_id: int, db: AsyncSession = Depends(get_db), redis_conn=Depends(get_redis), current_user: User = Depends(get_current_user)):
+    policy = TaskPolicy(current_user)
+    service = TaskService(db, redis_conn, policy)
+    return await service.get_by_id(task_id)
+
+@app.put('/tasks/{task_id}', response_model=TaskOut)
+async def update_task(task_id: int, task: UpdateTask, db: AsyncSession = Depends(get_db), redis_conn=Depends(get_redis), current_user: User = Depends(get_current_user)):
+    policy = TaskPolicy(current_user)
+    service = TaskService(db, redis_conn, policy)
+    return await service.update(task_id, task)
+
+@app.delete('/tasks/{task_id}', response_model=TaskOut)
+async def delete_task(task_id: int, db: AsyncSession = Depends(get_db), redis_conn=Depends(get_redis), current_user: User = Depends(get_current_user)):
+    policy = TaskPolicy(current_user)
+    service = TaskService(db, redis_conn, policy)
+    return await service.delete(task_id)
 
 
 

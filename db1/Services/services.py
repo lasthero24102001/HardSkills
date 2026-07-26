@@ -68,7 +68,7 @@ class UserService(BaseService):
         if self.policy.user.role != "admin":
             result = result.where(User.id == self.policy.user.id)
         user=user_filter.filter(result)
-        return paginate(self.db,user)
+        return await paginate(self.db,user)
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(1, min=1, max=4),
@@ -149,7 +149,7 @@ class ProjectService(BaseService, CreateService):
         if self.policy.user.role != "admin":
             result = result.where(Project.owner_id == self.policy.user.id)
         project = project_filter.filter(result)
-        return paginate(self.db, project)
+        return await paginate(self.db, project)
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(1, min=1, max=4),
@@ -243,7 +243,7 @@ class TaskService(BaseService,CreateService):
         if self.policy.user.role != "admin":
             result=result.where(Task.assignee_id == self.policy.user.id)
         task=task_filter.filter(result)
-        return paginate(self.db,task)
+        return await paginate(self.db,task)
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(1, min=1, max=4),

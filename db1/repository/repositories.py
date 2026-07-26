@@ -20,7 +20,7 @@ class UserRepository(BaseRepository):
         result = await self.db.execute(
             select(User)
             .options(
-                selectinload(User.projects),
+                selectinload(User.projects).selectinload(Project.tasks),  # добавь .selectinload(Project.tasks)
                 selectinload(User.tasks),
                 selectinload(User.refresh_tokens),
             )
