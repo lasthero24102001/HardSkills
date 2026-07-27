@@ -569,7 +569,7 @@
   <div class="auth-card">
     <div class="auth-logo">
       <div class="auth-logo-icon">⚡</div>
-      <h1>HardSkills</h1>
+      <h1>Добро пожаловать на наш сайт!</h1>
     </div>
     <div class="auth-tabs">
       <button class="auth-tab active" onclick="switchAuth('login')">Войти</button>
@@ -865,6 +865,7 @@
   </div>
 </div>
 
+
 <div id="toast-container"></div>
 
 <script>
@@ -979,14 +980,9 @@ async function doLogout() {
 // ===================== USER LOAD =====================
 async function loadCurrentUser() {
   try {
-    const res = await api('/users?page=1&size=1');
-    if (!res || !res.ok) return;
-    // Загружаем профиль из списка пользователей — ищем себя
-  } catch {}
-  // Альтернативный подход: парсим токен
-  try {
-    const payload = JSON.parse(atob(accessToken.split('.')[1]));
-    const res = await api(`/users/${payload.sub}`);
+    const res = await fetch(API + '/users/me', {
+      credentials: 'include'
+    });
     if (res && res.ok) {
       currentUser = await res.json();
       localStorage.setItem('current_user', JSON.stringify(currentUser));
@@ -1150,25 +1146,49 @@ async function saveEditUser() {
 }
 
 // ===================== PROJECTS =====================
+let projectsPage = 1;
+const projectsSize = 6;
+
 async function loadProjects() {
   const grid = document.getElementById('projects-grid');
   grid.innerHTML = '<div class="loading-center" style="grid-column:1/-1"><div class="spinner"></div> Загрузка...</div>';
   try {
-    let projects = [];
+    let url = '';
     if (currentUser.role === 'admin') {
-      const res = await api('/projects?page=1&size=50');
-      if (!res || !res.ok) { grid.innerHTML = '<div class="empty-state"><div class="empty-icon">📁</div><div class="empty-title">Нет доступа</div></div>'; return; }
-      const d = await res.json();
-      projects = d.items || [];
+      url = `/projects?page=${projectsPage}&size=${projectsSize}`;
     } else {
-      const res = await api('/users/' + currentUser.id);
-      if (!res || !res.ok) { grid.innerHTML = '<div class="empty-state"><div class="empty-icon">📁</div><div class="empty-title">Нет доступа</div></div>'; return; }
-      const u = await res.json();
-      projects = u.projects || [];
+      url = `/projects?page=${projectsPage}&size=${projectsSize}`;
     }
-    allProjects = projects;
+    const res = await api(url);
+    if (!res || !res.ok) { grid.innerHTML = '<div class="empty-state"><div class="empty-icon">📁</div><div class="empty-title">Нет доступа</div></div>'; return; }
+    const d = await res.json();
+    allProjects = d.items || [];
+    const total = d.total || 0;
+    const pages = Math.ceil(total / projectsSize);
     renderProjects();
+    renderProjectsPagination(pages);
   } catch { grid.innerHTML = '<div style="color:var(--red);padding:2rem;text-align:center">Ошибка загрузки</div>'; }
+}
+
+function renderProjectsPagination(pages) {
+  let el = document.getElementById('projects-pagination');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'projects-pagination';
+    el.style.cssText = 'display:flex;gap:8px;align-items:center;justify-content:center;margin-top:1.5rem;';
+    document.getElementById('projects-grid').after(el);
+  }
+  if (pages <= 1) { el.innerHTML = ''; return; }
+  el.innerHTML = `
+    <button class="btn btn-secondary btn-sm" onclick="changeProjectsPage(${projectsPage - 1})" ${projectsPage === 1 ? 'disabled' : ''}>← Назад</button>
+    <span style="color:var(--text2);font-size:14px">${projectsPage} / ${pages}</span>
+    <button class="btn btn-secondary btn-sm" onclick="changeProjectsPage(${projectsPage + 1})" ${projectsPage === pages ? 'disabled' : ''}>Вперёд →</button>
+  `;
+}
+
+function changeProjectsPage(page) {
+  projectsPage = page;
+  loadProjects();
 }
 function renderProjects() {
   const grid = document.getElementById('projects-grid');
@@ -1193,6 +1213,7 @@ function renderProjects() {
     </div>
   `).join('');
 }
+
 
 async function deleteProject(id, title) {
   if (!confirm(`Удалить проект «${title}»?`)) return;
@@ -1227,34 +1248,43 @@ async function createProject() {
 }
 
 // ===================== TASKS =====================
+let tasksPage = 1;
+const tasksSize = 10;
+
 async function loadTasks() {
   const tbody = document.getElementById('tasks-tbody');
   tbody.innerHTML = '<tr><td colspan="4"><div class="loading-center"><div class="spinner"></div> Загрузка...</div></td></tr>';
   try {
-    const res = await api('/users/' + currentUser.id);
+    const res = await api(`/tasks?page=${tasksPage}&size=${tasksSize}`);
     if (!res || !res.ok) { tbody.innerHTML = '<tr><td colspan="4" style="color:var(--red);padding:1rem;text-align:center">Нет доступа</td></tr>'; return; }
-    const u = await res.json();
-    allTasks = u.tasks || [];
+    const d = await res.json();
+    allTasks = d.items || [];
+    const total = d.total || 0;
+    const pages = Math.ceil(total / tasksSize);
     renderTasks();
+    renderTasksPagination(pages);
   } catch { tbody.innerHTML = '<tr><td colspan="4" style="color:var(--red);padding:1rem;text-align:center">Ошибка</td></tr>'; }
 }
 
-function renderTasks() {
-  const q = document.getElementById('tasks-search').value.toLowerCase();
-  const filtered = allTasks.filter(t => t.title.toLowerCase().includes(q));
-  const tbody = document.getElementById('tasks-tbody');
-  if (filtered.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="4"><div class="empty-state"><div class="empty-icon">✅</div><div class="empty-title">Задач нет</div><div class="empty-body">${q ? 'Ничего не найдено' : 'Попросите администратора назначить задачи'}</div></div></td></tr>`;
-    return;
+function renderTasksPagination(pages) {
+  let el = document.getElementById('tasks-pagination');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'tasks-pagination';
+    el.style.cssText = 'display:flex;gap:8px;align-items:center;justify-content:center;margin-top:1rem;';
+    document.getElementById('tasks-tbody').closest('table').after(el);
   }
-  tbody.innerHTML = filtered.map(t => `
-    <tr>
-      <td><span class="tag">#${t.id}</span></td>
-      <td><span class="text-ellipsis">${t.title}</span></td>
-      <td>${statusBadge(t.status)}</td>
-      <td style="color:var(--text3);font-size:13px">${fmtDate(t.created_at)}</td>
-    </tr>
-  `).join('');
+  if (pages <= 1) { el.innerHTML = ''; return; }
+  el.innerHTML = `
+    <button class="btn btn-secondary btn-sm" onclick="changeTasksPage(${tasksPage - 1})" ${tasksPage === 1 ? 'disabled' : ''}>← Назад</button>
+    <span style="color:var(--text2);font-size:14px">${tasksPage} / ${pages}</span>
+    <button class="btn btn-secondary btn-sm" onclick="changeTasksPage(${tasksPage + 1})" ${tasksPage === pages ? 'disabled' : ''}>Вперёд →</button>
+  `;
+}
+
+function changeTasksPage(page) {
+  tasksPage = page;
+  loadTasks();
 }
 
 function filterTasks() { renderTasks(); }
@@ -1374,9 +1404,9 @@ document.querySelectorAll('.modal-overlay').forEach(overlay => {
 
 // ===================== INIT =====================
 (async function init() {
-  if (accessToken && currentUser) {
+  if (currentUser) {
     enterApp();
-  } else if (accessToken) {
+  } else {
     await loadCurrentUser();
     if (currentUser) enterApp();
   }

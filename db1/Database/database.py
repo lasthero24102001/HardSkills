@@ -3,7 +3,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 from sqlalchemy.exc import OperationalError
 from config import settings
 
-engine = create_async_engine(settings.DATABASE_URL,echo=settings.SQL_ECHO,  # False по дефолту
+engine = create_async_engine(settings.DATABASE_URL,echo=settings.SQL_ECHO,
     pool_size=10, max_overflow=20,
     pool_timeout=30, pool_recycle=1800, pool_pre_ping=True,)
 async_factory = async_sessionmaker(bind=engine, expire_on_commit=False, class_=AsyncSession)

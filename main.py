@@ -227,6 +227,12 @@ async def read_users(db:AsyncSession=Depends(get_db),redis_conn=Depends(get_redi
     user=await service.get_all(user_filter)
     return user
 
+@app.get('/users/me', response_model=UserOut)
+async def get_me(db: AsyncSession = Depends(get_db), redis_conn=Depends(get_redis), current_user: User = Depends(get_current_user)):
+    policy = UserPolicy(current_user)
+    service = UserService(db, redis_conn, policy)
+    return await service.get_by_id(current_user.id)
+
 @app.get('/users/{user_id}', response_model=UserOut)
 async def get_user(user_id: int, db: AsyncSession = Depends(get_db), redis_conn=Depends(get_redis), current_user: User = Depends(get_current_user)):
     policy = UserPolicy(current_user)
