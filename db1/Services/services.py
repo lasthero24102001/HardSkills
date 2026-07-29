@@ -1,7 +1,14 @@
 import json
-from sqlalchemy import select
+import uuid
+from sqlalchemy.exc import IntegrityError
+
+from db1.Services.order_state import transition_order_status
+from db1.models.Base1 import OutboxEvent
+from db1.exception.exceptions import ProductNotFound, OutOfStock,OrderNotFound,OrderForbidden
+from db1.repository.repositories import OrderRepository
+from sqlalchemy import select,update
 from sqlalchemy.ext.asyncio import AsyncSession
-from db1.models.Base1 import User,Project,Task
+from db1.models.Base1 import User,Project,Task,Product,Order
 from db1.Security.security import Utils
 from db1.Security.security import BaseService,CreateService,BaseProjectPolicy,BaseUserPolicy,BaseTaskPolicy
 from sqlalchemy.orm import selectinload,joinedload
@@ -51,6 +58,111 @@ class AuthService:
         if not user or not Utils.password_verify(password,user.hashed_password):
             raise InvalidCredentials()
         return user
+class OrderService:
+    def __init__(self, db: AsyncSession):
+        self.db = db
+        self.order_repo = OrderRepository(db)
+
+    async def get_by_id(self, order_id: int, user_id: int):
+        order = await self.order_repo.get_by_id(order_id)
+        if not order:
+            raise OrderNotFound()
+        if order.user_id != user_id:
+            raise OrderForbidden()
+        return order
+
+    async def get_user_orders(self, user_id: int):
+        return await self.order_repo.get_user_orders(user_id)
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(1, min=1, max=4),
+        retry=retry_if_exception_type(OperationalError)
+    )
+    async def cancel_order(self, order_id: int, user_id: int):
+        order = await self.order_repo.get_by_id(order_id)
+        if not order:
+            raise OrderNotFound()
+        if order.user_id != user_id:
+            raise OrderForbidden()
+
+        transition_order_status(order, "cancelled")
+        await self.order_repo.restore_stock(order.product_id, order.quantity)
+
+        await self.db.commit()
+        await self.db.refresh(order)
+        return order
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(1, min=1, max=4),
+        retry=retry_if_exception_type(OperationalError)
+    )
+    async def cancel_stale_orders(self, older_than_minutes: int = 15):
+        stale_orders = await self.order_repo.get_stale_pending_orders(older_than_minutes)
+
+        cancelled_count = 0
+        for order in stale_orders:
+            transition_order_status(order, "cancelled")
+            await self.order_repo.restore_stock(order.product_id, order.quantity)
+            cancelled_count += 1
+
+        await self.db.commit()
+        return cancelled_count
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(1, min=1, max=4),
+        retry=retry_if_exception_type(OperationalError)
+    )
+    async def create_order(self, user_id: int, product_id: int, quantity: int, idempotency_key: str | None = None):
+        key = idempotency_key or str(uuid.uuid4())
+
+        existing_order = await self.order_repo.find_by_idempotency_key(key)
+        if existing_order:
+            return existing_order
+
+        try:
+            product = await self.order_repo.get_product(product_id)
+            if not product:
+                raise ProductNotFound()
+
+            amount = product.price * quantity
+
+            success = await self.order_repo.atomic_decrement_stock(product_id, quantity)
+            if not success:
+                raise OutOfStock()
+
+            new_order = await self.order_repo.create(
+                user_id=user_id,
+                product_id=product_id,
+                quantity=quantity,
+                amount=amount,
+                idempotency_key=key,
+            )
+
+            event = OutboxEvent(
+                event_type="order_created",
+                payload=json.dumps({
+                    "order_id": new_order.id,
+                    "user_id": user_id,
+                    "amount": amount,
+                    "product_id": product_id,
+                    "quantity": quantity,
+                }),
+                status="pending",
+            )
+            self.db.add(event)
+
+            await self.db.commit()
+            await self.db.refresh(new_order)
+            return new_order
+
+        except IntegrityError:
+            await self.db.rollback()
+            existing_order = await self.order_repo.find_by_idempotency_key(key)
+            return existing_order
+
+
 class UserService(BaseService):
     def __init__(self,db:AsyncSession,redis_conn,policy:BaseUserPolicy):
         self.db = db

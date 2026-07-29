@@ -15,9 +15,9 @@ from fastapi import FastAPI,Request,status,Depends,HTTPException
 from fastapi_limiter import FastAPILimiter
 from fastapi_limiter.depends import RateLimiter
 from fastapi_pagination import add_pagination, Page
-from db1.PydanticModels.Pydantic import UserOut,UserSimpleOut,CreateUser,TokenResponse,RefreshToken,UpdateUser
+from db1.PydanticModels.Pydantic import UserOut,UserSimpleOut,CreateUser,TokenResponse,RefreshToken,UpdateUser,CreateOrderRequest,OrderResponse
 from db1.Tokens.tokens import  create_access_token,create_refresh_token,save_refresh_token,delete_refresh_token,jwt,JWTError,get_current_user,validate_refresh_token
-from db1.Services.services import AuthService,UserService
+from db1.Services.services import AuthService,UserService,OrderService
 from db1.Security.security import UserPolicy,OAuth2PasswordRequestForm
 from db1.Database.database import engine,AsyncSession,get_db
 from db1.Filters.filters import UserFilter
@@ -139,7 +139,6 @@ async def get_redis_data(redis, key):
 async def set_redis_data(redis, key, value, ex=None):
     return await redis.set(key, value, ex=ex)
 
-# Circuit Breaker для БД
 @circuit(failure_threshold=5, recovery_timeout=30)
 async def execute_db_query(db, query):
     return await db.execute(query)
@@ -218,8 +217,48 @@ async def logout(data:RefreshToken,db:AsyncSession=Depends(get_db)):
     await delete_refresh_token(db,user_id=user_id,refresh_token=data.refresh_token)
     await db.commit()
     return {'message':'Success'}
+@app.post('/orders', response_model=OrderResponse, status_code=status.HTTP_201_CREATED,
+          dependencies=[Depends(RateLimiter(times=10, seconds=60))])
+async def create_order(
+    order: CreateOrderRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    service = OrderService(db)
+    new_order = await service.create_order(
+        user_id=current_user.id,
+        product_id=order.product_id,
+        quantity=order.quantity,
+        idempotency_key=order.idempotency_key
+    )
+    return new_order
+@app.get('/orders', response_model=list[OrderResponse])
+async def get_orders(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    service = OrderService(db)
+    return await service.get_user_orders(current_user.id)
 
 
+@app.get('/orders/{order_id}', response_model=OrderResponse)
+async def get_order(
+    order_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    service = OrderService(db)
+    return await service.get_by_id(order_id, current_user.id)
+
+
+@app.post('/orders/{order_id}/cancel', response_model=OrderResponse)
+async def cancel_order(
+    order_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    service = OrderService(db)
+    return await service.cancel_order(order_id, current_user.id)
 @app.get('/users',response_model=Page[UserOut])
 async def read_users(db:AsyncSession=Depends(get_db),redis_conn=Depends(get_redis),user_filter:UserFilter=Depends(),current_user:User=Depends(get_current_user)):
     policy=UserPolicy(current_user)

@@ -65,3 +65,25 @@ class TaskAlreadyExists(AppException):
 class TaskForbidden(AppException):
     status_code = 403
     detail = "Task forbidden"
+
+class ProductNotFound(AppException):
+    status_code = 404
+    detail = "Product not found"
+
+
+class OutOfStock(AppException):
+    status_code = 409
+    detail = "Not enough stock"
+
+class InvalidOrderTransition(AppException):
+    status_code = 409
+    detail = "Invalid order status transition"
+
+class OrderNotFound(AppException):
+    status_code = 404
+    detail = "Order not found"
+
+
+class OrderForbidden(AppException):
+    status_code = 403
+    detail = "Order forbidden"

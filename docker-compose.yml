@@ -31,6 +31,10 @@ services:
 
   app:
     build: .
+    # multi-stage образ уже содержит все зависимости — bind-mount кода
+    # используем только для dev-удобства (быстрый reload без пересборки).
+    # В настоящем проде эту строку volumes лучше убрать вовсе,
+    # чтобы контейнер запускал ровно то, что было собрано в образ.
     command: sh -c "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000"
     ports:
       - "8000:8000"
@@ -46,6 +50,12 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
 
   prometheus:
     image: prom/prometheus:latest
@@ -63,7 +73,7 @@ services:
     ports:
       - "3000:3000"
     environment:
-      GF_SECURITY_ADMIN_PASSWORD: REDACTED
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
     volumes:
       - grafana_data:/var/lib/grafana
     depends_on:
@@ -81,6 +91,12 @@ services:
     depends_on:
       - redis
       - app
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A celery_app inspect ping -d celery@$$HOSTNAME || exit 1"]
+      interval: 30s
+      timeout: 10s
+      start_period: 20s
+      retries: 3
 
   celery_beat:
     build: .
@@ -97,7 +113,8 @@ services:
 
   flower:
     build: .
-    command: celery -A celery_app flower --port=5555
+    # basic-auth закрывает Flower паролем — задай FLOWER_USER/FLOWER_PASSWORD в .env
+    command: celery -A celery_app flower --port=5555 --basic_auth=${FLOWER_USER}:${FLOWER_PASSWORD}
     ports:
       - "5555:5555"
     env_file:

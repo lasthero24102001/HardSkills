@@ -1,0 +1,37 @@
+# Секреты — никогда не должны попасть в образ
+.env
+.env.*
+!.env.example
+
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+venv/
+.venv/
+
+# Тесты — не нужны в финальном образе
+db1/tests/
+tests/
+
+# IDE
+.idea/
+.vscode/
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Разное
+*.log
+.DS_Store
+README.md

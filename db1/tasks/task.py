@@ -1,8 +1,15 @@
+import json
 import smtplib
+from datetime import datetime
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+
+from sqlalchemy import select
+
 from celery_app import celery_app
 from config import settings
+from db1.Database.database import async_factory
+from db1.models.Base1 import OutboxEvent
 import logging
 import redis
 
@@ -63,7 +70,6 @@ def send_welcome_email(self, user_id: int, email: str):
         raise self.retry(exc=e, countdown=2 ** self.request.retries)
 
 
-# убрали self — это не метод класса
 def send_welcome_email_on_failure(exc, task_id, args, kwargs, einfo):
     dead_letter_task.delay(
         task_name="send_welcome_email",
@@ -98,7 +104,6 @@ def send_morning_notification(self):
         raise self.retry(exc=e, countdown=2 ** self.request.retries)
 
 
-# убрали self — это не метод класса
 def send_morning_notification_on_failure(exc, task_id, args, kwargs, einfo):
     dead_letter_task.delay(
         task_name="send_morning_notification",
@@ -108,3 +113,99 @@ def send_morning_notification_on_failure(exc, task_id, args, kwargs, einfo):
     )
 
 send_morning_notification.on_failure = send_morning_notification_on_failure
+
+
+# ==========================================
+# Outbox processing — доставка событий заказов
+# ==========================================
+
+async def notify_payment_service(payload: dict):
+    # TODO: заменить на реальный вызов Payme/Click API, когда появится merchant_id
+    logger.info(f"[MOCK] Payment service notified: {payload}")
+
+
+@celery_app.task(
+    bind=True,
+    max_retries=5,
+    acks_late=True,
+    soft_time_limit=30,
+    time_limit=60,
+)
+def process_outbox(self):
+    import asyncio
+
+    async def _process():
+        async with async_factory() as db:
+            result = await db.execute(
+                select(OutboxEvent)
+                .where(OutboxEvent.status == "pending")
+                .limit(10)
+                .with_for_update(skip_locked=True)
+            )
+            events = result.scalars().all()
+
+            for event in events:
+                try:
+                    payload = json.loads(event.payload)
+
+                    if event.event_type == "order_created":
+                        await notify_payment_service(payload)
+
+                    event.status = "sent"
+                    event.processed_at = datetime.utcnow()
+
+                except Exception as e:
+                    event.status = "failed"
+                    logger.error(f"Outbox event {event.id} failed: {e}")
+
+            await db.commit()
+
+    asyncio.run(_process())
+
+
+def process_outbox_on_failure(exc, task_id, args, kwargs, einfo):
+    dead_letter_task.delay(
+        task_name="process_outbox",
+        args=list(args),
+        kwargs=kwargs,
+        error=str(exc)
+    )
+
+process_outbox.on_failure = process_outbox_on_failure
+
+
+# ==========================================
+# Cancel stale pending orders — возврат stock
+# для заказов, которые никто не оплатил
+# ==========================================
+
+@celery_app.task(
+    bind=True,
+    max_retries=3,
+    acks_late=True,
+    soft_time_limit=60,
+    time_limit=120,
+)
+def cancel_stale_orders(self):
+    import asyncio
+    from db1.Services.services import OrderService
+
+    async def _process():
+        async with async_factory() as db:
+            service = OrderService(db)
+            count = await service.cancel_stale_orders(older_than_minutes=15)
+            if count:
+                logger.info(f"Cancelled {count} stale pending orders")
+
+    asyncio.run(_process())
+
+
+def cancel_stale_orders_on_failure(exc, task_id, args, kwargs, einfo):
+    dead_letter_task.delay(
+        task_name="cancel_stale_orders",
+        args=list(args),
+        kwargs=kwargs,
+        error=str(exc)
+    )
+
+cancel_stale_orders.on_failure = cancel_stale_orders_on_failure
