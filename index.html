@@ -915,15 +915,15 @@ async function doLogin() {
   if (!un || !pw) { showAuthError('Заполните все поля'); return; }
   btn.textContent = 'Входим...'; btn.disabled = true;
   try {
-    const form = new URLSearchParams();
-    form.append('username', un); form.append('password', pw);
     const res = await fetch(API + '/users/login', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: form
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: un, password: pw })
     });
     const d = await res.json();
     if (!res.ok) { showAuthError(d.detail || 'Ошибка входа'); return; }
+    // токены теперь в httpOnly cookie — не храним в localStorage
     await loadCurrentUser();
     enterApp();
   } catch { showAuthError('Сервер недоступен. Проверьте что бэкенд запущен.'); }

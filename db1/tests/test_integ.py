@@ -58,13 +58,11 @@ async def auth_headers(client):
         "role": "admin"
     })
     # логинимся
-    response = await client.post("/users/login", data={
+    response = await client.post("/users/login", json={
         "username": "testadmin",
         "password": "123456"
     })
-    token = response.json()["access_token"]
-    return {"Authorization": f"Bearer {token}"}
-
+    return response.cookies
 # ===== REGISTER =====
 @pytest.mark.asyncio
 async def test_register_success(client):
@@ -112,13 +110,13 @@ async def test_login_success(client):
         "password": "123456",
         "email": "login@test.com"
     })
-    response = await client.post("/users/login", data={
+    response = await client.post("/users/login", json={
         "username": "loginuser",
         "password": "123456"
     })
     assert response.status_code == 200
-    assert "access_token" in response.json()
-    assert "refresh_token" in response.json()
+    assert "access_token" in response.cookies
+    assert "refresh_token" in response.cookies
 
 @pytest.mark.asyncio
 async def test_login_wrong_password(client):
@@ -127,7 +125,7 @@ async def test_login_wrong_password(client):
         "password": "123456",
         "email": "wrong@test.com"
     })
-    response = await client.post("/users/login", data={
+    response = await client.post("/users/login", json={
         "username": "wrongpass",
         "password": "wrongpassword"
     })
@@ -135,7 +133,7 @@ async def test_login_wrong_password(client):
 
 @pytest.mark.asyncio
 async def test_login_wrong_username(client):
-    response = await client.post("/users/login", data={
+    response = await client.post("/users/login", json={
         "username": "notexist",
         "password": "123456"
     })
@@ -149,7 +147,7 @@ async def test_get_user_unauthorized(client):
 
 @pytest.mark.asyncio
 async def test_get_user_not_found(client, auth_headers):
-    response = await client.get("/users/99999", headers=auth_headers)
+    response = await client.get("/users/99999", cookies=auth_headers)
     assert response.status_code == 404
 
 @pytest.mark.asyncio
@@ -161,7 +159,7 @@ async def test_get_user_success(client, auth_headers):
         "email": "getuser@test.com"
     })
     user_id = reg.json()["id"]
-    response = await client.get(f"/users/{user_id}", headers=auth_headers)
+    response = await client.get(f"/users/{user_id}", cookies=auth_headers)
     assert response.status_code == 200
     assert response.json()["username"] == "getuser"
 
@@ -177,7 +175,7 @@ async def test_update_user_success(client, auth_headers):
     response = await client.put(
         f"/users/{user_id}",
         json={"username": "updatedname"},
-        headers=auth_headers
+        cookies=auth_headers
     )
     assert response.status_code == 200
     assert response.json()["username"] == "updatedname"
@@ -193,13 +191,13 @@ async def test_delete_user_success(client, auth_headers):
     user_id = reg.json()["id"]
     response = await client.delete(
         f"/users/{user_id}",
-        headers=auth_headers
+        cookies=auth_headers
     )
     assert response.status_code == 200
 
 @pytest.mark.asyncio
 async def test_delete_user_not_found(client, auth_headers):
-    response = await client.delete("/users/99999", headers=auth_headers)
+    response = await client.delete("/users/99999", cookies=auth_headers)
     assert response.status_code == 404
 
 # ===== LOGOUT =====
@@ -210,12 +208,11 @@ async def test_logout_success(client):
         "password": "123456",
         "email": "logout@test.com"
     })
-    login = await client.post("/users/login", data={
+    login = await client.post("/users/login", json={
         "username": "logoutuser",
         "password": "123456"
     })
 
-    # добавь эту строку чтобы увидеть что вернул login
-    print(login.status_code, login.json())
-
-    refresh_token = login.json()["refresh_token"]
+    response = await client.post("/users/logout", cookies=login.cookies)
+    assert response.status_code == 200
+    assert response.json() == {"message": "Success"}

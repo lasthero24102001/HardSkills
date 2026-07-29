@@ -11,14 +11,15 @@ from prometheus_fastapi_instrumentator import Instrumentator
 from circuitbreaker import circuit
 from fastapi.responses import JSONResponse
 from db1.exception.exceptions import AppException, InvalidTokenException, UserNotFound
-from fastapi import FastAPI,Request,status,Depends,HTTPException
+from fastapi import FastAPI,Request,status,Depends
 from fastapi_limiter import FastAPILimiter
 from fastapi_limiter.depends import RateLimiter
 from fastapi_pagination import add_pagination, Page
-from db1.PydanticModels.Pydantic import UserOut,UserSimpleOut,CreateUser,TokenResponse,RefreshToken,UpdateUser,CreateOrderRequest,OrderResponse
+from db1.PydanticModels.Pydantic import UserOut, UserSimpleOut, CreateUser, TokenResponse, RefreshToken, UpdateUser, \
+    CreateOrderRequest, OrderResponse, LoginRequest
 from db1.Tokens.tokens import  create_access_token,create_refresh_token,save_refresh_token,delete_refresh_token,jwt,JWTError,get_current_user,validate_refresh_token
 from db1.Services.services import AuthService,UserService,OrderService
-from db1.Security.security import UserPolicy,OAuth2PasswordRequestForm
+from db1.Security.security import UserPolicy
 from db1.Database.database import engine,AsyncSession,get_db
 from db1.Filters.filters import UserFilter
 from db1.models.Base1 import User
@@ -156,9 +157,9 @@ async def register(user: CreateUser, db: AsyncSession = Depends(get_db)):
 
 
 @app.post('/users/login',dependencies=[Depends(RateLimiter(times=6,seconds=60))])
-async def login(response: Response,form_data:OAuth2PasswordRequestForm=Depends(),db:AsyncSession=Depends(get_db)):
+async def login(response: Response,data: LoginRequest,db:AsyncSession=Depends(get_db)):
     auth=AuthService(db)
-    user=await auth.login_user(username=form_data.username,password=form_data.password)
+    user=await auth.login_user(username=data.username,password=data.password)
     access_token=create_access_token(user_id=user.id,role=user.role)
     refresh_token=create_refresh_token(user_id=user.id,role=user.role)
     await save_refresh_token(db,user_id=user.id,refresh_token=refresh_token)

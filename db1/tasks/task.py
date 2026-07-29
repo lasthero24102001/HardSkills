@@ -5,10 +5,10 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
 from celery_app import celery_app
 from config import settings
-from db1.Database.database import async_factory
 from db1.models.Base1 import OutboxEvent
 import logging
 import redis
@@ -124,41 +124,39 @@ async def notify_payment_service(payload: dict):
     logger.info(f"[MOCK] Payment service notified: {payload}")
 
 
-@celery_app.task(
-    bind=True,
-    max_retries=5,
-    acks_late=True,
-    soft_time_limit=30,
-    time_limit=60,
-)
+@celery_app.task(bind=True, max_retries=5, acks_late=True)
 def process_outbox(self):
     import asyncio
 
     async def _process():
-        async with async_factory() as db:
-            result = await db.execute(
-                select(OutboxEvent)
-                .where(OutboxEvent.status == "pending")
-                .limit(10)
-                .with_for_update(skip_locked=True)
-            )
-            events = result.scalars().all()
+        # Свежий engine на каждый вызов таска — иначе конфликт event loop
+        engine = create_async_engine(settings.DATABASE_URL)
+        session_factory = async_sessionmaker(bind=engine, expire_on_commit=False)
 
-            for event in events:
-                try:
-                    payload = json.loads(event.payload)
+        try:
+            async with session_factory() as db:
+                result = await db.execute(
+                    select(OutboxEvent)
+                    .where(OutboxEvent.status == "pending")
+                    .limit(10)
+                    .with_for_update(skip_locked=True)
+                )
+                events = result.scalars().all()
 
-                    if event.event_type == "order_created":
-                        await notify_payment_service(payload)
+                for event in events:
+                    try:
+                        payload = json.loads(event.payload)
+                        if event.event_type == "order_created":
+                            await notify_payment_service(payload)
+                        event.status = "sent"
+                        event.processed_at = datetime.utcnow()
+                    except Exception as e:
+                        event.status = "failed"
+                        logger.error(f"Outbox event {event.id} failed: {e}")
 
-                    event.status = "sent"
-                    event.processed_at = datetime.utcnow()
-
-                except Exception as e:
-                    event.status = "failed"
-                    logger.error(f"Outbox event {event.id} failed: {e}")
-
-            await db.commit()
+                await db.commit()
+        finally:
+            await engine.dispose()
 
     asyncio.run(_process())
 
@@ -191,11 +189,18 @@ def cancel_stale_orders(self):
     from db1.Services.services import OrderService
 
     async def _process():
-        async with async_factory() as db:
-            service = OrderService(db)
-            count = await service.cancel_stale_orders(older_than_minutes=15)
-            if count:
-                logger.info(f"Cancelled {count} stale pending orders")
+        # Свежий engine на каждый вызов таска — тот же паттерн, что и process_outbox
+        engine = create_async_engine(settings.DATABASE_URL)
+        session_factory = async_sessionmaker(bind=engine, expire_on_commit=False)
+
+        try:
+            async with session_factory() as db:
+                service = OrderService(db)
+                count = await service.cancel_stale_orders(older_than_minutes=15)
+                if count:
+                    logger.info(f"Cancelled {count} stale pending orders")
+        finally:
+            await engine.dispose()
 
     asyncio.run(_process())
 
