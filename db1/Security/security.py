@@ -1,4 +1,3 @@
-from fastapi.security import OAuth2PasswordBearer,OAuth2PasswordRequestForm
 from passlib.context import CryptContext
 from abc import ABC, abstractmethod
 from db1.models.Base1 import User,Project,Task
@@ -6,7 +5,6 @@ from typing import Any
 
 
 password_context = CryptContext(schemes=["argon2"], deprecated="auto")
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/users/login")
 class Utils:
     @staticmethod
     def password_hash(password:str):

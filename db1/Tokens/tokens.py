@@ -2,9 +2,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from config import settings
 from datetime import datetime,timedelta,timezone
 from jose import jwt,JWTError
+
+from db1.exception.exceptions import InvalidTokenException
 from db1.models.Base1 import RefreshTokenDB,User
-from db1.Security.security import Utils,oauth2_scheme
-from fastapi import HTTPException, Depends
+from db1.Security.security import Utils
+from fastapi import HTTPException, Depends,Request
 from sqlalchemy import select
 from db1.Database.database import get_db
 
@@ -48,21 +50,24 @@ def decode_token(token:str):
         return payload
     except JWTError:
         raise HTTPException(status_code=404,detail="Token is invalid")
-async def get_current_user(token:str=Depends(oauth2_scheme),db:AsyncSession=Depends(get_db)):
+async def get_current_user(request:Request,db:AsyncSession=Depends(get_db)):
     try:
+        token = request.cookies.get("access_token")
+        if not token:
+            raise InvalidTokenException()
         payload=decode_token(token)
         user_id=int(payload['sub'])
         if not user_id:
-            raise HTTPException(status_code=404,detail="Token is invalid")
+            raise InvalidTokenException()
         if payload['type'] != 'access':
-            raise HTTPException(status_code=404,detail="Token is invalid")
+            raise InvalidTokenException()
         result=await db.execute(select(User).where(User.id == user_id))
         user=result.scalars().first()
         if not user:
-            raise HTTPException(status_code=404,detail="Token is invalid")
+            raise InvalidTokenException()
         return user
     except JWTError:
-        raise HTTPException(status_code=404,detail="Token is invalid")
+        raise InvalidTokenException()
 async def require_admin(current_user:User=Depends(get_current_user)):
     if current_user.role != "admin":
         raise HTTPException(status_code=403,detail="You are not an admin")

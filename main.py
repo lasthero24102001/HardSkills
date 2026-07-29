@@ -10,7 +10,7 @@ from fastapi.responses import Response
 from prometheus_fastapi_instrumentator import Instrumentator
 from circuitbreaker import circuit
 from fastapi.responses import JSONResponse
-from db1.exception.exceptions import AppException
+from db1.exception.exceptions import AppException, InvalidTokenException, UserNotFound
 from fastapi import FastAPI,Request,status,Depends,HTTPException
 from fastapi_limiter import FastAPILimiter
 from fastapi_limiter.depends import RateLimiter
@@ -155,7 +155,7 @@ async def register(user: CreateUser, db: AsyncSession = Depends(get_db)):
     return new_user_obj
 
 
-@app.post('/users/login',response_model=TokenResponse,dependencies=[Depends(RateLimiter(times=6,seconds=60))])
+@app.post('/users/login',dependencies=[Depends(RateLimiter(times=6,seconds=60))])
 async def login(response: Response,form_data:OAuth2PasswordRequestForm=Depends(),db:AsyncSession=Depends(get_db)):
     auth=AuthService(db)
     user=await auth.login_user(username=form_data.username,password=form_data.password)
@@ -178,44 +178,66 @@ async def login(response: Response,form_data:OAuth2PasswordRequestForm=Depends()
         samesite="strict",
         max_age=60 * 60 * 24 * 30
     )
-    return TokenResponse(access_token=access_token,refresh_token=refresh_token,token_type="Bearer")
+    return {"message": "Login successful"}
 
 
-
-@app.post('/users/refresh',response_model=TokenResponse,dependencies=[Depends(RateLimiter(times=6,seconds=60))])
-async def refresh(data:RefreshToken,db:AsyncSession=Depends(get_db)):
+@app.post('/users/refresh',dependencies=[Depends(RateLimiter(times=6,seconds=60))])
+async def refresh(request:Request,response:Response,db:AsyncSession=Depends(get_db)):
     try:
-        payload=jwt.decode(data.refresh_token,settings.SECRET_KEY,algorithms=[settings.ALGORITHM])
+        refresh_token = request.cookies.get("refresh_token")
+        if not refresh_token:
+            raise InvalidTokenException()
+        payload=jwt.decode(refresh_token,settings.SECRET_KEY,algorithms=[settings.ALGORITHM])
         user_id=payload['sub']
         if not user_id:
-            raise HTTPException(status_code=400,detail="Invalid token")
+            raise InvalidTokenException()
         if payload['type'] != 'refresh':
-            raise HTTPException(status_code=400,detail="Invalid token")
+            raise InvalidTokenException()
     except JWTError:
-        raise HTTPException(status_code=400,detail="Invalid token")
+        raise InvalidTokenException()
     result=await db.execute(select(User).where(User.id == user_id))
     user=result.scalars().first()
     if not user:
-        raise HTTPException(status_code=404,detail="User not found")
-    await validate_refresh_token(db,user_id=user.id,refresh_token=data.refresh_token)
-    await delete_refresh_token(db,user_id=user.id,refresh_token=data.refresh_token)
+        raise UserNotFound()
+    await validate_refresh_token(db,user_id=user.id,refresh_token=refresh_token)
+    await delete_refresh_token(db,user_id=user.id,refresh_token=refresh_token)
     new_access=create_access_token(user_id=user.id,role=user.role)
     new_refresh=create_refresh_token(user_id=user.id,role=user.role)
     await save_refresh_token(db,user_id=user.id,refresh_token=new_refresh)
-    return TokenResponse(access_token=new_access,refresh_token=new_refresh,token_type="Bearer")
-
+    response.set_cookie(
+        key="access_token",
+        value=new_access,
+        httponly=True,
+        secure=False,  # True в продакшене с HTTPS
+        samesite="strict",
+        max_age=1800
+    )
+    response.set_cookie(
+        key="refresh_token",
+        value=new_refresh,
+        httponly=True,
+        secure=False,
+        samesite="strict",
+        max_age=60 * 60 * 24 * 30
+    )
+    return {"message": "Token refreshed"}
 
 @app.post('/users/logout')
-async def logout(data:RefreshToken,db:AsyncSession=Depends(get_db)):
+async def logout(request:Request,response:Response,db:AsyncSession=Depends(get_db)):
     try:
-        payload=jwt.decode(data.refresh_token,settings.SECRET_KEY,algorithms=[settings.ALGORITHM])
+        refresh_token = request.cookies.get("refresh_token")
+        if not refresh_token:
+            raise InvalidTokenException()
+        payload=jwt.decode(refresh_token,settings.SECRET_KEY,algorithms=[settings.ALGORITHM])
         user_id=payload['sub']
         if not user_id:
-            raise HTTPException(status_code=400,detail="Invalid token")
+            raise InvalidTokenException()
     except JWTError:
-        raise HTTPException(status_code=400,detail="Invalid token")
-    await delete_refresh_token(db,user_id=user_id,refresh_token=data.refresh_token)
+        raise InvalidTokenException()
+    await delete_refresh_token(db,user_id=user_id,refresh_token=refresh_token)
     await db.commit()
+    response.delete_cookie("access_token")
+    response.delete_cookie("refresh_token")
     return {'message':'Success'}
 @app.post('/orders', response_model=OrderResponse, status_code=status.HTTP_201_CREATED,
           dependencies=[Depends(RateLimiter(times=10, seconds=60))])
