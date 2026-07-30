@@ -13,6 +13,7 @@ class CreateProject(BaseModel):
 class CreateTask(BaseModel):
     title:str
     status:str
+    description: Optional[str] = None
     project_id:int
     assignee_id:int
     created_at:Optional[datetime]=None
@@ -42,6 +43,7 @@ class TaskOut(BaseModel):
     id:int
     title:str
     status:str
+    description: Optional[str] = None
     created_at:Optional[datetime]=None
 
     model_config = ConfigDict(from_attributes=True)
@@ -153,5 +155,6 @@ class UpdateTask(BaseModel):
     title:Optional[str]=None
     status:Optional[str]=None
     created_at:Optional[datetime]=None
+    description: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)

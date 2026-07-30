@@ -68,7 +68,7 @@ class BaseTaskPolicy(ABC):
     def can_read(self,task:Task):
         pass
     @abstractmethod
-    def can_create(self,task:Task):
+    def can_create(self):
         pass
     @abstractmethod
     def can_update(self,task:Task):
@@ -79,7 +79,7 @@ class BaseTaskPolicy(ABC):
 class TaskPolicy(BaseTaskPolicy):
     def can_read(self,task:Task):
         return self.user.role == "admin" or task.assignee_id == self.user.id
-    def can_create(self,task:Task):
+    def can_create(self):
         return self.user.role == "admin"
     def can_update(self,task:Task):
         return self.user.role == "admin"

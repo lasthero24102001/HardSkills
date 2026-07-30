@@ -43,6 +43,7 @@ class Task(Base):
     id = Column(Integer, primary_key=True)
     title = Column(String(255), nullable=False)
     status = Column(String(50), default="pending")
+    description = Column(String(1000), nullable=True)
     project_id = Column(Integer, ForeignKey("projects.id"))
     assignee_id = Column(Integer, ForeignKey("users.id"))
     created_at = Column(DateTime, default=datetime.utcnow)
