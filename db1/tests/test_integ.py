@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 @pytest_asyncio.fixture
 async def client():
     redis_client = await redis.from_url(
-        "redis://localhost:6379/1",
+        "redis://localhost:6380/1",
         decode_responses=True
     )
 
@@ -29,23 +29,15 @@ async def client():
     ) as client:
         yield client
 
-    await redis_client.close()
+    await redis_client.aclose()
 @pytest_asyncio.fixture(autouse=True)
 async def clean_db():
-    # до теста — очищаем таблицы
-    async with async_factory() as db:
-        await db.execute(text("DELETE FROM refresh_tokens"))
-        await db.execute(text("DELETE FROM tasks"))
-        await db.execute(text("DELETE FROM projects"))
-        await db.execute(text("DELETE FROM users"))
-        await db.commit()
     yield
-    # после теста — снова очищаем
     async with async_factory() as db:
-        await db.execute(text("DELETE FROM refresh_tokens"))
-        await db.execute(text("DELETE FROM tasks"))
-        await db.execute(text("DELETE FROM projects"))
-        await db.execute(text("DELETE FROM users"))
+        await db.execute(text(
+            "TRUNCATE TABLE refresh_tokens, tasks, projects, orders, "
+            "outbox_events, transactions, products, users RESTART IDENTITY CASCADE"
+        ))
         await db.commit()
 # fixture для авторизации
 @pytest_asyncio.fixture

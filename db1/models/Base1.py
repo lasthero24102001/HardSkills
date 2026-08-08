@@ -1,7 +1,6 @@
 from sqlalchemy.orm import declarative_base,relationship
 from sqlalchemy import Column, Integer, String, ForeignKey,Index,DateTime
-from datetime import datetime
-
+from datetime import datetime, timezone
 
 Base = declarative_base()
 
@@ -46,7 +45,7 @@ class Task(Base):
     description = Column(String(1000), nullable=True)
     project_id = Column(Integer, ForeignKey("projects.id"))
     assignee_id = Column(Integer, ForeignKey("users.id"))
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.now(timezone.utc))
     project = relationship("Project", back_populates="tasks")
     assignee = relationship("User", back_populates="tasks")
     __table_args__ = (Index('idx_title',"title"),)
@@ -67,7 +66,7 @@ class Product(Base):
     name = Column(String, nullable=False)
     price = Column(Integer, nullable=False)  # в тийинах
     stock = Column(Integer, nullable=False, default=0)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.now(timezone.utc))
     orders = relationship("Order", back_populates="product")
 
 
@@ -81,7 +80,7 @@ class Order(Base):
     quantity = Column(Integer, nullable=False)
     amount = Column(Integer, nullable=False)
     status = Column(String(20), default="pending", nullable=False)  # pending/paid/cancelled/refunded
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.now(timezone.utc))
 
     user = relationship("User", back_populates="orders")
     product = relationship("Product", back_populates="orders")
@@ -99,7 +98,7 @@ class OutboxEvent(Base):
     event_type = Column(String(100), nullable=False)
     payload = Column(String, nullable=False)
     status = Column(String(20), default="pending", nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.now(timezone.utc))
     processed_at = Column(DateTime, nullable=True)
 
     __table_args__ = (
@@ -116,7 +115,7 @@ class Transaction(Base):
     provider_transaction_id = Column(String, unique=True, nullable=True)
     amount = Column(Integer, nullable=False)
     state = Column(Integer, nullable=False, default=1)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.now(timezone.utc))
     performed_at = Column(DateTime, nullable=True)
     cancelled_at = Column(DateTime, nullable=True)
 

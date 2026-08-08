@@ -15,7 +15,7 @@ from fastapi import FastAPI,Request,status,Depends
 from fastapi_limiter import FastAPILimiter
 from fastapi_limiter.depends import RateLimiter
 from fastapi_pagination import add_pagination, Page
-from db1.PydanticModels.Pydantic import UserOut, UserSimpleOut, CreateUser, TokenResponse, RefreshToken, UpdateUser, \
+from db1.PydanticModels.Pydantic import UserOut, UserSimpleOut, CreateUser, UpdateUser, \
     CreateOrderRequest, OrderResponse, LoginRequest
 from db1.Tokens.tokens import  create_access_token,create_refresh_token,save_refresh_token,delete_refresh_token,jwt,JWTError,get_current_user,validate_refresh_token
 from db1.Services.services import AuthService,UserService,OrderService
@@ -23,10 +23,8 @@ from db1.Security.security import UserPolicy
 from db1.Database.database import engine,AsyncSession,get_db
 from db1.Filters.filters import UserFilter
 from db1.models.Base1 import User
-from db1.Database.database import retry, stop_after_attempt, wait_exponential, retry_if_exception_type,OperationalError
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
-from db1.models.Base1 import Base
 from db1.tasks.task import send_welcome_email
 from db1.Services.services import ProjectService, TaskService
 from db1.Security.security import ProjectPolicy, TaskPolicy

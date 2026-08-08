@@ -56,7 +56,7 @@ class ProjectPolicy(BaseProjectPolicy):
     def can_read(self,project:Project):
         return self.user.role == "admin" or project.owner_id == self.user.id
     def can_create(self):
-        return self.user.id
+        return self.user is not None
     def can_update(self,project:Project):
         return project.owner_id == self.user.id
     def can_delete(self,project:Project):

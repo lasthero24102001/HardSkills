@@ -127,7 +127,7 @@ services:
 
   flower:
     build: .
-    # basic-auth закрывает Flower паролем — задай FLOWER_USER/FLOWER_PASSWORD в .env
+    # basic-auth закрывает Flower паролем fd — задай FLOWER_USER/FLOWER_PASSWORD в .env
     command: celery -A celery_app flower --port=5555 --basic_auth=${FLOWER_USER}:${FLOWER_PASSWORD}
     ports:
       - "5555:5555"

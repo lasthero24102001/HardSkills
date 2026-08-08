@@ -6,12 +6,11 @@ from db1.Services.order_state import transition_order_status
 from db1.models.Base1 import OutboxEvent
 from db1.exception.exceptions import ProductNotFound, OutOfStock,OrderNotFound,OrderForbidden
 from db1.repository.repositories import OrderRepository
-from sqlalchemy import select,update
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from db1.models.Base1 import User,Project,Task,Product,Order
+from db1.models.Base1 import User,Project,Task
 from db1.Security.security import Utils
 from db1.Security.security import BaseService,CreateService,BaseProjectPolicy,BaseUserPolicy,BaseTaskPolicy
-from sqlalchemy.orm import selectinload,joinedload
 from db1.PydanticModels.Pydantic import *
 from config import settings
 from db1.Filters.filters import UserFilter,ProjectFilter,TaskFilter
