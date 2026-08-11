@@ -6,7 +6,6 @@ class CreateUser(BaseModel):
     username:str
     email:EmailStr
     password: str = Field(min_length=6, max_length=100)
-    role:str="user"
 class CreateProject(BaseModel):
     title:str
     created_at:Optional[datetime]=None

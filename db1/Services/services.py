@@ -34,7 +34,7 @@ class AuthService:
         wait=wait_exponential(1, min=1, max=4),
         retry=retry_if_exception_type(OperationalError)
     )
-    async def register_user(self, username: str, password: str, email: str,role:str="user"):
+    async def register_user(self, username: str, password: str, email: str):
         existing_user = await self.user_repo.get_by_username(username)
         if existing_user:
             raise UserAlreadyExists()
@@ -42,7 +42,7 @@ class AuthService:
         if existing_email:
             raise EmailAlreadyExists()
         hashed_password = Utils.password_hash(password)
-        new_user = User(username=username, email=email, hashed_password=hashed_password, role=role)
+        new_user = User(username=username, email=email, hashed_password=hashed_password, role="user")
         self.db.add(new_user)
         await self.db.commit()
         await self.db.refresh(new_user)
