@@ -1,5 +1,5 @@
 from sqlalchemy.orm import declarative_base,relationship
-from sqlalchemy import Column, Integer, String, ForeignKey,Index,DateTime
+from sqlalchemy import Column, Integer, String, ForeignKey,Index,DateTime,Boolean
 from datetime import datetime, timezone
 
 Base = declarative_base()
@@ -13,6 +13,7 @@ class User(Base):
     hashed_password = Column(String, nullable=False)
     role = Column(String(20), default="user")
     created_at = Column(DateTime, default=datetime.utcnow)
+    is_banned = Column(Boolean, default=False, nullable=False)
     projects = relationship("Project", back_populates="owner")
     tasks = relationship("Task", back_populates="assignee")
     orders = relationship("Order", back_populates="user")
@@ -145,4 +146,25 @@ class AuditLog(Base):
     __table_args__ = (
         Index("idx_audit_actor_created", "actor_id", "created_at"),
         Index("idx_audit_action", "action"),
+    )
+
+class RequestLog(Base):
+    __tablename__ = "request_logs"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    method = Column(String(10), nullable=False)
+    path = Column(String(255), nullable=False)
+    status_code = Column(Integer, nullable=False)
+    duration_ms = Column(Integer, nullable=True)
+    ip_address = Column(String(45), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    user = relationship("User", foreign_keys=[user_id])
+
+    __table_args__ = (
+        Index("idx_reqlog_user_created", "user_id", "created_at"),
+        Index("idx_reqlog_path", "path"),
+        Index("idx_reqlog_status", "status_code"),
+        Index("idx_reqlog_created", "created_at"),
     )

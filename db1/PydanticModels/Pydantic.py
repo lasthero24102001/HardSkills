@@ -79,12 +79,37 @@ class UserOut(BaseModel):
     username:str
     email:EmailStr
     role:str
+    is_banned:bool=False
     created_at:Optional[datetime]=None
     projects:List[ProjectOut]=Field(default_factory=list)
     tasks:List[TaskOut]=Field(default_factory=list)
     refresh_tokens:List[RefreshDBTokenOut]=Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True,arbitrary_types_allowed=True)
+
+class RequestLogOut(BaseModel):
+    id: int
+    user_id: Optional[int] = None
+    method: str
+    path: str
+    status_code: int
+    duration_ms: Optional[int] = None
+    ip_address: Optional[str] = None
+    created_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+class AdminStats(BaseModel):
+    total_users: int
+    total_admins: int
+    total_projects: int
+    total_tasks: int
+    requests_last_24h: int
+    unique_active_users_last_24h: int
+
+class BanUserRequest(BaseModel):
+    reason: Optional[str] = None
+
 class ProductCreate(BaseModel):
     name: str
     price: int

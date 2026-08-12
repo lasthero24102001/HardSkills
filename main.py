@@ -17,18 +17,27 @@ from fastapi_limiter.depends import RateLimiter
 from fastapi_pagination import add_pagination, Page
 from db1.PydanticModels.Pydantic import UserOut, UserSimpleOut, CreateUser, UpdateUser, \
     CreateOrderRequest, OrderResponse, LoginRequest
-from db1.Tokens.tokens import  create_access_token,create_refresh_token,save_refresh_token,delete_refresh_token,jwt,JWTError,get_current_user,validate_refresh_token
+from db1.repository.repositories import RequestLogRepository
+from db1.PydanticModels.Pydantic import RequestLogOut, AdminStats
+from db1.models.Base1 import Project, Task
+from db1.Services.audit import log_action
+from sqlalchemy import func
+from db1.repository.repositories import AuditLogRepository
+from db1.PydanticModels.Pydantic import AuditLogOut
+from db1.Database.database import engine,AsyncSession,get_db,async_factory
+from db1.Tokens.tokens import  create_access_token,create_refresh_token,save_refresh_token,delete_refresh_token,jwt,JWTError,get_current_user,validate_refresh_token,require_admin
 from db1.Services.services import AuthService,UserService,OrderService
 from db1.Security.security import UserPolicy
 from db1.Database.database import engine,AsyncSession,get_db
 from db1.Filters.filters import UserFilter
-from db1.models.Base1 import User
+from db1.models.Base1 import User, RequestLog, Project, Task
 from fastapi_pagination.ext.sqlalchemy import paginate
-from db1.repository.repositories import AuditLogRepository
-from db1.PydanticModels.Pydantic import AuditLogOut
+from db1.repository.repositories import AuditLogRepository, RequestLogRepository
+from db1.PydanticModels.Pydantic import AuditLogOut, RequestLogOut, AdminStats, BanUserRequest
+from db1.Services.audit import log_action
 from db1.Tokens.tokens import require_admin
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import select
+from sqlalchemy import select, func
 from db1.tasks.task import send_welcome_email
 from db1.Services.services import ProjectService, TaskService
 from db1.Security.security import ProjectPolicy, TaskPolicy
@@ -88,6 +97,20 @@ Instrumentator().instrument(app).expose(app)
 add_pagination(app)
 
 
+NOISY_PATHS = {"/health", "/metrics"}
+
+
+def _extract_user_id_from_cookie(request: Request) -> int | None:
+    token = request.cookies.get("access_token")
+    if not token:
+        return None
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        return int(payload["sub"])
+    except Exception:
+        return None
+
+
 @app.middleware("http")
 async def add_process_time_header(request: Request, call_next):
     request_id = str(uuid.uuid4())
@@ -101,6 +124,23 @@ async def add_process_time_header(request: Request, call_next):
     process_time = time.time() - start_time
     response.headers["X-Request-ID"] = request_id
     response.headers["X-Process-Time"] = f"{process_time:.4f}"
+
+    if request.url.path not in NOISY_PATHS:
+        try:
+            user_id = _extract_user_id_from_cookie(request)
+            client_ip = request.client.host if request.client else None
+            async with async_factory() as log_db:
+                log_db.add(RequestLog(
+                    user_id=user_id,
+                    method=request.method,
+                    path=request.url.path,
+                    status_code=response.status_code,
+                    duration_ms=int(process_time * 1000),
+                    ip_address=client_ip,
+                ))
+                await log_db.commit()
+        except Exception as e:
+            logger.warning(f"Failed to write request log: {e}")
 
     return response
 @app.exception_handler(AppException)
@@ -254,6 +294,75 @@ async def get_audit_logs(
     query = await repo.get_all(actor_id=actor_id, action=action)
     return await paginate(db, query)
 
+@app.get('/admin/request-logs', response_model=Page[RequestLogOut])
+async def get_request_logs(
+    user_id: int | None = None,
+    method: str | None = None,
+    path: str | None = None,
+    status_code: int | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    repo = RequestLogRepository(db)
+    query = await repo.get_all(user_id=user_id, method=method, path=path, status_code=status_code)
+    return await paginate(db, query)
+
+
+@app.delete('/admin/request-logs')
+async def delete_request_logs(
+    user_id: int | None = None,
+    method: str | None = None,
+    path: str | None = None,
+    status_code: int | None = None,
+    older_than_days: int | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    repo = RequestLogRepository(db)
+    if older_than_days is not None:
+        deleted = await repo.delete_older_than(older_than_days)
+    else:
+        deleted = await repo.delete_filtered(
+            user_id=user_id, method=method, path=path, status_code=status_code
+        )
+    await log_action(
+        db, actor_id=current_user.id, action="request_logs.delete",
+        details={"user_id": user_id, "method": method, "path": path,
+                 "status_code": status_code, "older_than_days": older_than_days,
+                 "deleted_count": deleted},
+        commit=True,
+    )
+    return {"deleted": deleted}
+
+
+@app.get('/admin/stats', response_model=AdminStats)
+async def get_admin_stats(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    from datetime import datetime, timedelta
+    since_24h = datetime.utcnow() - timedelta(hours=24)
+
+    total_users = (await db.execute(select(func.count()).select_from(User))).scalar_one()
+    total_admins = (await db.execute(
+        select(func.count()).select_from(User).where(User.role == "admin")
+    )).scalar_one()
+    total_projects = (await db.execute(select(func.count()).select_from(Project))).scalar_one()
+    total_tasks = (await db.execute(select(func.count()).select_from(Task))).scalar_one()
+
+    reqlog_repo = RequestLogRepository(db)
+    requests_last_24h = await reqlog_repo.count_since(since_24h)
+    unique_active_users_last_24h = await reqlog_repo.count_unique_users_since(since_24h)
+
+    return AdminStats(
+        total_users=total_users,
+        total_admins=total_admins,
+        total_projects=total_projects,
+        total_tasks=total_tasks,
+        requests_last_24h=requests_last_24h,
+        unique_active_users_last_24h=unique_active_users_last_24h,
+    )
+
 @app.post('/orders', response_model=OrderResponse, status_code=status.HTTP_201_CREATED,
           dependencies=[Depends(RateLimiter(times=10, seconds=60))])
 async def create_order(
@@ -330,6 +439,30 @@ async def delete_user(user_id:int,db:AsyncSession=Depends(get_db),redis_conn=Dep
     delete_user1=await service.delete(user_id)
     return delete_user1
 
+@app.post('/users/{user_id}/ban', response_model=UserOut)
+async def ban_user(
+    user_id: int,
+    body: BanUserRequest | None = None,
+    db: AsyncSession = Depends(get_db),
+    redis_conn=Depends(get_redis),
+    current_user: User = Depends(require_admin),
+):
+    policy = UserPolicy(current_user)
+    service = UserService(db, redis_conn, policy)
+    reason = body.reason if body else None
+    return await service.ban(user_id, reason=reason)
+
+@app.post('/users/{user_id}/unban', response_model=UserOut)
+async def unban_user(
+    user_id: int,
+    db: AsyncSession = Depends(get_db),
+    redis_conn=Depends(get_redis),
+    current_user: User = Depends(require_admin),
+):
+    policy = UserPolicy(current_user)
+    service = UserService(db, redis_conn, policy)
+    return await service.unban(user_id)
+
 @app.post('/projects', response_model=ProjectOut, status_code=status.HTTP_201_CREATED)
 async def create_project(project: CreateProject, db: AsyncSession = Depends(get_db), redis_conn=Depends(get_redis), current_user: User = Depends(get_current_user)):
     policy = ProjectPolicy(current_user)
@@ -337,6 +470,7 @@ async def create_project(project: CreateProject, db: AsyncSession = Depends(get_
     new_project = await service.create(project)
     repo = ProjectRepository(db)
     return await repo.get_project_id(new_project.id)
+
 
 @app.get('/projects', response_model=Page[ProjectOut])
 async def get_projects(db: AsyncSession = Depends(get_db), redis_conn=Depends(get_redis), project_filter: ProjectFilter = Depends(), current_user: User = Depends(get_current_user)):

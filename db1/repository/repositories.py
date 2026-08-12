@@ -1,7 +1,7 @@
 from abc import ABC
 from datetime import datetime, timedelta
-from db1.models.Base1 import AuditLog
-from sqlalchemy import select,update
+from db1.models.Base1 import AuditLog, RequestLog
+from sqlalchemy import select,update,delete,func
 from sqlalchemy.orm import selectinload,joinedload
 
 from db1.Filters.filters import ProjectFilter
@@ -46,6 +46,57 @@ class AuditLogRepository(BaseRepository):
         if action is not None:
             query = query.where(AuditLog.action == action)
         return query
+class RequestLogRepository(BaseRepository):
+    def _apply_filters(self, query, user_id=None, method=None, path=None, status_code=None,
+                        since: datetime | None = None, until: datetime | None = None):
+        if user_id is not None:
+            query = query.where(RequestLog.user_id == user_id)
+        if method is not None:
+            query = query.where(RequestLog.method == method.upper())
+        if path is not None:
+            query = query.where(RequestLog.path.ilike(f"%{path}%"))
+        if status_code is not None:
+            query = query.where(RequestLog.status_code == status_code)
+        if since is not None:
+            query = query.where(RequestLog.created_at >= since)
+        if until is not None:
+            query = query.where(RequestLog.created_at <= until)
+        return query
+
+    async def get_all(self, user_id=None, method=None, path=None, status_code=None,
+                       since=None, until=None):
+        query = select(RequestLog).order_by(RequestLog.created_at.desc())
+        query = self._apply_filters(query, user_id, method, path, status_code, since, until)
+        return query
+
+    async def delete_filtered(self, user_id=None, method=None, path=None, status_code=None,
+                               since=None, until=None) -> int:
+        if not any([user_id, method, path, status_code, since, until]):
+            raise ValueError("At least one filter is required to delete request logs")
+        query = delete(RequestLog)
+        query = self._apply_filters(query, user_id, method, path, status_code, since, until)
+        result = await self.db.execute(query)
+        await self.db.commit()
+        return result.rowcount
+
+    async def delete_older_than(self, older_than_days: int) -> int:
+        threshold = datetime.utcnow() - timedelta(days=older_than_days)
+        result = await self.db.execute(delete(RequestLog).where(RequestLog.created_at < threshold))
+        await self.db.commit()
+        return result.rowcount
+
+    async def count_since(self, since: datetime) -> int:
+        result = await self.db.execute(
+            select(func.count()).select_from(RequestLog).where(RequestLog.created_at >= since)
+        )
+        return result.scalar_one()
+
+    async def count_unique_users_since(self, since: datetime) -> int:
+        result = await self.db.execute(
+            select(func.count(func.distinct(RequestLog.user_id)))
+            .where(RequestLog.created_at >= since, RequestLog.user_id.isnot(None))
+        )
+        return result.scalar_one()
 
 class ProjectRepository(BaseRepository):
     async def get_project_id(self, project_id:int):

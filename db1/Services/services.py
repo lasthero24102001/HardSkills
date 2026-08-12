@@ -16,7 +16,7 @@ from config import settings
 from db1.Filters.filters import UserFilter,ProjectFilter,TaskFilter
 from db1.exception.exceptions import UserNotFound, UserAlreadyExists, UserForbidden, EmailAlreadyExists, \
     InvalidCredentials, ProjectNotFound, TaskNotFound, TaskForbidden, ProjectForbidden, ProjectAlreadyExists, \
-    TaskAlreadyExists
+    TaskAlreadyExists, UserBanned
 from db1.repository.repositories import UserRepository, ProjectRepository, TaskRepository
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from sqlalchemy.exc import OperationalError
@@ -52,10 +52,12 @@ class AuthService:
         wait=wait_exponential(1, min=1, max=4),
         retry=retry_if_exception_type(OperationalError)
     )
-    async def login_user(self,username:str,password:str):
-        user=await self.user_repo.get_by_username(username)
-        if not user or not Utils.password_verify(password,user.hashed_password):
+    async def login_user(self, username: str, password: str):
+        user = await self.user_repo.get_by_username(username)
+        if not user or not Utils.password_verify(password, user.hashed_password):
             raise InvalidCredentials()
+        if user.is_banned:
+            raise UserBanned()
         return user
 class OrderService:
     def __init__(self, db: AsyncSession):
@@ -250,6 +252,64 @@ class UserService(BaseService):
         await self.db.delete(user)
         await self.db.commit()
         await self.redis.delete(f'user:{user_id}')
+        return user
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(1, min=1, max=4),
+        retry=retry_if_exception_type(OperationalError)
+    )
+    async def ban(self, user_id: int, reason: str | None = None):
+        user = await self.user_repo.get_by_id(user_id)
+        if not user:
+            raise UserNotFound()
+        if not self.policy.can_delete(user):
+            raise UserForbidden()
+        if user.id == self.policy.user.id:
+            raise UserForbidden()
+        if user.role == "admin":
+            raise UserForbidden()
+        if user.is_banned:
+            return user
+        user.is_banned = True
+        await log_action(
+            self.db,
+            actor_id=self.policy.user.id,
+            action="user.ban",
+            target_type="user",
+            target_id=user_id,
+            details={"username": user.username, "reason": reason},
+        )
+        await self.db.commit()
+        await self.redis.delete(f'user:{user_id}')
+        await self.db.refresh(user)
+        return user
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(1, min=1, max=4),
+        retry=retry_if_exception_type(OperationalError)
+    )
+    async def unban(self, user_id: int):
+        user = await self.user_repo.get_by_id(user_id)
+        if not user:
+            raise UserNotFound()
+        if not self.policy.can_delete(user):
+            raise UserForbidden()
+        if not user.is_banned:
+            return user
+        user.is_banned = False
+        await log_action(
+            self.db,
+            actor_id=self.policy.user.id,
+            action="user.unban",
+            target_type="user",
+            target_id=user_id,
+            details={"username": user.username},
+        )
+        await self.db.commit()
+        await self.redis.delete(f'user:{user_id}')
+        await self.db.refresh(user)
         return user
 
 class ProjectService(BaseService, CreateService):

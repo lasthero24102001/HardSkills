@@ -87,3 +87,7 @@ class OrderNotFound(AppException):
 class OrderForbidden(AppException):
     status_code = 403
     detail = "Order forbidden"
+
+class UserBanned(AppException):
+    status_code = 403
+    detail = "Your account has been banned"

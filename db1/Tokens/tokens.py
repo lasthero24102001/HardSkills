@@ -3,7 +3,7 @@ from config import settings
 from datetime import datetime,timedelta,timezone
 from jose import jwt,JWTError
 
-from db1.exception.exceptions import InvalidTokenException
+from db1.exception.exceptions import InvalidTokenException, UserBanned
 from db1.models.Base1 import RefreshTokenDB,User
 from db1.Security.security import Utils
 from fastapi import HTTPException, Depends,Request
@@ -61,10 +61,12 @@ async def get_current_user(request:Request,db:AsyncSession=Depends(get_db)):
             raise InvalidTokenException()
         if payload['type'] != 'access':
             raise InvalidTokenException()
-        result=await db.execute(select(User).where(User.id == user_id))
-        user=result.scalars().first()
+        result = await db.execute(select(User).where(User.id == user_id))
+        user = result.scalars().first()
         if not user:
             raise InvalidTokenException()
+        if user.is_banned:
+            raise UserBanned()
         return user
     except JWTError:
         raise InvalidTokenException()
