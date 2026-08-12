@@ -149,7 +149,6 @@ async def register(user: CreateUser, db: AsyncSession = Depends(get_db)):
         username=user.username,
         password=user.password,
         email=user.email,
-        role=user.role
     )
     send_welcome_email.delay(user_id=new_user_obj.id, email=new_user_obj.email)
     return new_user_obj
