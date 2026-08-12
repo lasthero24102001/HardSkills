@@ -123,4 +123,26 @@ class Transaction(Base):
 
     __table_args__ = (
         Index("idx_transaction_provider", "provider", "provider_transaction_id"),
+
+
+
+    )
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+
+    id = Column(Integer, primary_key=True)
+    actor_id = Column(Integer, ForeignKey("users.id"), nullable=True)  # кто совершил действие (nullable — на случай системных действий)
+    action = Column(String(100), nullable=False)          # напр. "user.delete", "user.ban", "project.delete"
+    target_type = Column(String(50), nullable=True)        # "user" / "project" / "task"
+    target_id = Column(Integer, nullable=True)
+    details = Column(String(1000), nullable=True)          # JSON-строка с доп. контекстом (что именно изменилось)
+    ip_address = Column(String(45), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    actor = relationship("User", foreign_keys=[actor_id])
+
+    __table_args__ = (
+        Index("idx_audit_actor_created", "actor_id", "created_at"),
+        Index("idx_audit_action", "action"),
     )

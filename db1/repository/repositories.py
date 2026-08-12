@@ -1,6 +1,6 @@
 from abc import ABC
 from datetime import datetime, timedelta
-
+from db1.models.Base1 import AuditLog
 from sqlalchemy import select,update
 from sqlalchemy.orm import selectinload,joinedload
 
@@ -37,6 +37,15 @@ class UserRepository(BaseRepository):
     async def user_task_assignee_id(self, assignee_id: int):
         result = await self.db.execute(select(User).where(User.id == assignee_id))
         return result.scalars().first()
+
+class AuditLogRepository(BaseRepository):
+    async def get_all(self, actor_id: int | None = None, action: str | None = None):
+        query = select(AuditLog).order_by(AuditLog.created_at.desc())
+        if actor_id is not None:
+            query = query.where(AuditLog.actor_id == actor_id)
+        if action is not None:
+            query = query.where(AuditLog.action == action)
+        return query
 
 class ProjectRepository(BaseRepository):
     async def get_project_id(self, project_id:int):

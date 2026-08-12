@@ -23,6 +23,10 @@ from db1.Security.security import UserPolicy
 from db1.Database.database import engine,AsyncSession,get_db
 from db1.Filters.filters import UserFilter
 from db1.models.Base1 import User
+from fastapi_pagination.ext.sqlalchemy import paginate
+from db1.repository.repositories import AuditLogRepository
+from db1.PydanticModels.Pydantic import AuditLogOut
+from db1.Tokens.tokens import require_admin
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
 from db1.tasks.task import send_welcome_email
@@ -238,6 +242,18 @@ async def logout(request:Request,response:Response,db:AsyncSession=Depends(get_d
     response.delete_cookie("access_token")
     response.delete_cookie("refresh_token")
     return {'message':'Success'}
+
+@app.get('/audit-logs', response_model=Page[AuditLogOut])
+async def get_audit_logs(
+    actor_id: int | None = None,
+    action: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin),  # уже готовый dependency у тебя в tokens.py
+):
+    repo = AuditLogRepository(db)
+    query = await repo.get_all(actor_id=actor_id, action=action)
+    return await paginate(db, query)
+
 @app.post('/orders', response_model=OrderResponse, status_code=status.HTTP_201_CREATED,
           dependencies=[Depends(RateLimiter(times=10, seconds=60))])
 async def create_order(
