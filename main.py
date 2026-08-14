@@ -6,6 +6,7 @@ import sentry_sdk
 import redis.asyncio as redis
 from contextlib import asynccontextmanager
 from sqlalchemy import text
+from datetime import datetime, timedelta
 from fastapi.responses import Response
 from prometheus_fastapi_instrumentator import Instrumentator
 from circuitbreaker import circuit
@@ -20,10 +21,7 @@ from db1.PydanticModels.Pydantic import UserOut, UserSimpleOut, CreateUser, Upda
 from db1.repository.repositories import RequestLogRepository
 from db1.PydanticModels.Pydantic import RequestLogOut, AdminStats
 from db1.models.Base1 import Project, Task
-from db1.Services.audit import log_action
 from sqlalchemy import func
-from db1.repository.repositories import AuditLogRepository
-from db1.PydanticModels.Pydantic import AuditLogOut
 from db1.Database.database import engine,AsyncSession,get_db,async_factory
 from db1.Tokens.tokens import  create_access_token,create_refresh_token,save_refresh_token,delete_refresh_token,jwt,JWTError,get_current_user,validate_refresh_token,require_admin
 from db1.Services.services import AuthService,UserService,OrderService
@@ -32,9 +30,8 @@ from db1.Database.database import engine,AsyncSession,get_db
 from db1.Filters.filters import UserFilter
 from db1.models.Base1 import User, RequestLog, Project, Task
 from fastapi_pagination.ext.sqlalchemy import paginate
-from db1.repository.repositories import AuditLogRepository, RequestLogRepository
-from db1.PydanticModels.Pydantic import AuditLogOut, RequestLogOut, AdminStats, BanUserRequest
-from db1.Services.audit import log_action
+from db1.repository.repositories import RequestLogRepository
+from db1.PydanticModels.Pydantic import RequestLogOut, AdminStats, BanUserRequest
 from db1.Tokens.tokens import require_admin
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select, func
@@ -283,17 +280,6 @@ async def logout(request:Request,response:Response,db:AsyncSession=Depends(get_d
     response.delete_cookie("refresh_token")
     return {'message':'Success'}
 
-@app.get('/audit-logs', response_model=Page[AuditLogOut])
-async def get_audit_logs(
-    actor_id: int | None = None,
-    action: str | None = None,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_admin),  # уже готовый dependency у тебя в tokens.py
-):
-    repo = AuditLogRepository(db)
-    query = await repo.get_all(actor_id=actor_id, action=action)
-    return await paginate(db, query)
-
 @app.get('/admin/request-logs', response_model=Page[RequestLogOut])
 async def get_request_logs(
     user_id: int | None = None,
@@ -325,13 +311,6 @@ async def delete_request_logs(
         deleted = await repo.delete_filtered(
             user_id=user_id, method=method, path=path, status_code=status_code
         )
-    await log_action(
-        db, actor_id=current_user.id, action="request_logs.delete",
-        details={"user_id": user_id, "method": method, "path": path,
-                 "status_code": status_code, "older_than_days": older_than_days,
-                 "deleted_count": deleted},
-        commit=True,
-    )
     return {"deleted": deleted}
 
 
@@ -340,7 +319,6 @@ async def get_admin_stats(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_admin),
 ):
-    from datetime import datetime, timedelta
     since_24h = datetime.utcnow() - timedelta(hours=24)
 
     total_users = (await db.execute(select(func.count()).select_from(User))).scalar_one()

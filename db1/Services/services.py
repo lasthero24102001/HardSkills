@@ -20,7 +20,6 @@ from db1.exception.exceptions import UserNotFound, UserAlreadyExists, UserForbid
 from db1.repository.repositories import UserRepository, ProjectRepository, TaskRepository
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from sqlalchemy.exc import OperationalError
-from db1.Services.audit import log_action
 from fastapi_pagination.ext.sqlalchemy import paginate
 
 
@@ -241,14 +240,6 @@ class UserService(BaseService):
             raise UserNotFound()
         if not self.policy.can_delete(user):
             raise UserForbidden()
-        await log_action(
-            self.db,
-            actor_id=self.policy.user.id,
-            action="user.delete",
-            target_type="user",
-            target_id=user_id,
-            details={"deleted_username": user.username, "deleted_email": user.email},
-        )
         await self.db.delete(user)
         await self.db.commit()
         await self.redis.delete(f'user:{user_id}')
@@ -272,14 +263,6 @@ class UserService(BaseService):
         if user.is_banned:
             return user
         user.is_banned = True
-        await log_action(
-            self.db,
-            actor_id=self.policy.user.id,
-            action="user.ban",
-            target_type="user",
-            target_id=user_id,
-            details={"username": user.username, "reason": reason},
-        )
         await self.db.commit()
         await self.redis.delete(f'user:{user_id}')
         await self.db.refresh(user)
@@ -299,14 +282,6 @@ class UserService(BaseService):
         if not user.is_banned:
             return user
         user.is_banned = False
-        await log_action(
-            self.db,
-            actor_id=self.policy.user.id,
-            action="user.unban",
-            target_type="user",
-            target_id=user_id,
-            details={"username": user.username},
-        )
         await self.db.commit()
         await self.redis.delete(f'user:{user_id}')
         await self.db.refresh(user)

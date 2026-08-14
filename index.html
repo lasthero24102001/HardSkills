@@ -531,7 +531,7 @@
   .divider { height: 1px; background: var(--border); margin: 1.5rem 0; }
 
   #page-dashboard, #page-users, #page-projects,
-  #page-tasks, #page-profile { display: none; }
+  #page-tasks, #page-profile, #page-logs { display: none; }
 
   .active-page { display: block !important; }
 
@@ -604,13 +604,6 @@
         <label>Пароль (6–10 символов)</label>
         <input type="password" id="reg-password" placeholder="••••••"/>
       </div>
-      <div class="form-group">
-        <label>Роль</label>
-        <select id="reg-role">
-          <option value="user">Пользователь</option>
-          <option value="admin">Администратор</option>
-        </select>
-      </div>
       <button class="btn btn-primary" onclick="doRegister()" id="reg-btn">Создать аккаунт</button>
     </div>
   </div>
@@ -631,6 +624,9 @@
       <div class="nav-section-label" id="nav-section-admin" style="display:none">Управление</div>
       <div class="nav-item" onclick="navigate('users')" id="nav-users" style="display:none">
         <span class="nav-icon">👥</span> Пользователи
+      </div>
+      <div class="nav-item" onclick="navigate('logs')" id="nav-logs" style="display:none">
+        <span class="nav-icon">📜</span> Логи
       </div>
       <div class="nav-section-label">Рабочее</div>
       <div class="nav-item" onclick="navigate('projects')" id="nav-projects">
@@ -701,6 +697,63 @@
           </thead>
           <tbody id="users-tbody">
             <tr><td colspan="6"><div class="loading-center"><div class="spinner"></div> Загрузка...</div></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- LOGS (admin) -->
+    <div id="page-logs">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Логи запросов</div>
+          <div class="page-subtitle">Кто что делал в системе</div>
+        </div>
+      </div>
+      <div class="card mb-2" style="margin-bottom:1rem">
+        <div class="profile-grid" style="grid-template-columns:repeat(4,1fr);gap:0.75rem">
+          <div class="form-group" style="margin-bottom:0">
+            <label>User ID</label>
+            <input type="number" id="logs-filter-user" placeholder="Любой" oninput="debouncedLoadLogs()"/>
+          </div>
+          <div class="form-group" style="margin-bottom:0">
+            <label>Метод</label>
+            <select id="logs-filter-method" onchange="loadLogs(1)">
+              <option value="">Любой</option>
+              <option value="GET">GET</option>
+              <option value="POST">POST</option>
+              <option value="PUT">PUT</option>
+              <option value="DELETE">DELETE</option>
+              <option value="OPTIONS">OPTIONS</option>
+            </select>
+          </div>
+          <div class="form-group" style="margin-bottom:0">
+            <label>Путь содержит</label>
+            <input type="text" id="logs-filter-path" placeholder="/orders" oninput="debouncedLoadLogs()"/>
+          </div>
+          <div class="form-group" style="margin-bottom:0">
+            <label>Статус</label>
+            <input type="number" id="logs-filter-status" placeholder="напр. 403" oninput="debouncedLoadLogs()"/>
+          </div>
+        </div>
+        <div class="divider"></div>
+        <div class="flex-row" style="flex-wrap:wrap;gap:1rem">
+          <button class="btn btn-danger btn-sm" onclick="deleteLogsByFilter()">🗑 Удалить по текущим фильтрам</button>
+          <div class="flex-row" style="gap:8px">
+            <input type="number" id="logs-older-than" placeholder="дней" style="width:90px" class="search-input"/>
+            <button class="btn btn-danger btn-sm" onclick="deleteLogsOlderThan()">🗑 Удалить старше N дней</button>
+          </div>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Время</th><th>User ID</th><th>Метод</th><th>Путь</th><th>Статус</th><th>Мс</th><th>IP</th>
+            </tr>
+          </thead>
+          <tbody id="logs-tbody">
+            <tr><td colspan="7"><div class="loading-center"><div class="spinner"></div> Загрузка...</div></td></tr>
           </tbody>
         </table>
       </div>
@@ -870,6 +923,26 @@
   </div>
 </div>
 
+<div class="modal-overlay" id="modal-ban-user">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">Забанить пользователя</div>
+      <button class="btn-icon" onclick="closeModal('modal-ban-user')">✕</button>
+    </div>
+    <div style="margin-bottom:1rem;color:var(--text2);font-size:14px">
+      Пользователь <strong id="ban-user-name" style="color:var(--text)"></strong> потеряет доступ немедленно. Данные сохранятся, бан можно снять позже.
+    </div>
+    <div class="form-group">
+      <label>Причина (необязательно)</label>
+      <input type="text" id="ban-reason" placeholder="напр. оскорбления в чате"/>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('modal-ban-user')">Отмена</button>
+      <button class="btn btn-danger" onclick="confirmBanUser()" style="width:auto">Забанить</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="modal-view-task">
   <div class="modal">
     <div class="modal-header">
@@ -963,7 +1036,6 @@ async function doRegister() {
   const un = document.getElementById('reg-username').value.trim();
   const em = document.getElementById('reg-email').value.trim();
   const pw = document.getElementById('reg-password').value;
-  const role = document.getElementById('reg-role').value;
   if (!un || !em || !pw) { showAuthError('Заполните все поля'); return; }
   if (pw.length < 6) { showAuthError('Пароль должен быть минимум 6 символов'); return; }
   btn.textContent = 'Создаём...'; btn.disabled = true;
@@ -971,7 +1043,7 @@ async function doRegister() {
     const res = await fetch(API + '/users/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username: un, email: em, password: pw, role })
+      body: JSON.stringify({ username: un, email: em, password: pw })
     });
     const d = await res.json();
     if (!res.ok) { showAuthError(d.detail || 'Ошибка регистрации'); return; }
@@ -1032,15 +1104,20 @@ function updateSidebar() {
   document.getElementById('sidebar-avatar').textContent = initials;
   document.getElementById('sidebar-username').textContent = currentUser.username;
   document.getElementById('sidebar-role').textContent = currentUser.role === 'admin' ? '🔑 Администратор' : '👤 Пользователь';
-  if (currentUser.role === 'admin') {
-    document.getElementById('nav-users').style.display = 'flex';
-    document.getElementById('nav-section-admin').style.display = 'block';
-    document.getElementById('btn-create-task').style.display = 'inline-flex';
-  }
+
+  const isAdmin = currentUser.role === 'admin';
+  document.getElementById('nav-users').style.display = isAdmin ? 'flex' : 'none';
+  document.getElementById('nav-logs').style.display = isAdmin ? 'flex' : 'none';
+  document.getElementById('nav-section-admin').style.display = isAdmin ? 'block' : 'none';document.getElementById('btn-create-task').style.display = isAdmin ? 'inline-flex' : 'none';
 }
 
 function navigate(page) {
-  ['dashboard', 'users', 'projects', 'tasks', 'profile'].forEach(p => {
+  const adminOnlyPages = ['users', 'logs'];
+  if (adminOnlyPages.includes(page) && (!currentUser || currentUser.role !== 'admin')) {
+    page = 'dashboard';
+  }
+
+  ['dashboard', 'users', 'projects', 'tasks', 'profile', 'logs'].forEach(p => {
     document.getElementById(`page-${p}`).classList.remove('active-page');
     const nav = document.getElementById(`nav-${p}`);
     if (nav) nav.classList.remove('active');
@@ -1053,6 +1130,7 @@ function navigate(page) {
   if (page === 'projects') loadProjects();
   if (page === 'tasks') loadTasks();
   if (page === 'profile') loadProfile();
+  if (page === 'logs') loadLogs(1);
 }
 
 // ===================== DASHBOARD =====================
@@ -1124,11 +1202,18 @@ function renderUsers() {
       <td><span class="tag">#${u.id}</span></td>
       <td><div class="flex-row"><div class="avatar" style="width:28px;height:28px;font-size:11px">${u.username.slice(0,2).toUpperCase()}</div>${u.username}</div></td>
       <td style="color:var(--text2)">${u.email}</td>
-      <td>${u.role === 'admin' ? '<span class="badge badge-purple">admin</span>' : '<span class="badge badge-blue">user</span>'}</td>
+      <td>
+        ${u.role === 'admin' ? '<span class="badge badge-purple">admin</span>' : '<span class="badge badge-blue">user</span>'}
+        ${u.is_banned ? ' <span class="badge badge-red">забанен</span>' : ''}
+      </td>
       <td style="color:var(--text3);font-size:13px">${fmtDate(u.created_at)}</td>
       <td><div class="actions-cell">
         <button class="btn btn-secondary btn-sm" onclick="openEditUser(${u.id}, '${u.username}', '${u.email}')">✏️</button>
-        <button class="btn btn-danger btn-sm" onclick="deleteUser(${u.id}, '${u.username}')">🗑</button>
+        ${u.is_banned
+          ? `<button class="btn btn-secondary btn-sm" onclick="unbanUser(${u.id}, '${u.username}')" title="Разбанить">✅</button>`
+          : `<button class="btn btn-secondary btn-sm" onclick="openBanModal(${u.id}, '${u.username}')" title="Забанить">🚫</button>`
+        }
+        <button class="btn btn-danger btn-sm" onclick="deleteUser(${u.id}, '${u.username}')" title="Удалить полностью">🗑</button>
       </div></td>
     </tr>
   `).join('');
@@ -1137,10 +1222,44 @@ function renderUsers() {
 function filterUsers() { renderUsers(); }
 
 async function deleteUser(id, name) {
-  if (!confirm(`Удалить пользователя «${name}»?`)) return;
+  if (!confirm(`Удалить пользователя «${name}» ПОЛНОСТЬЮ? Это необратимо — все его данные будут стёрты.`)) return;
   const res = await api(`/users/${id}`, { method: 'DELETE' });
   if (res && res.ok) { toast(`Пользователь ${name} удалён`, 'success'); loadUsers(); }
   else { const d = await res.json(); toast(d.detail || 'Ошибка', 'error'); }
+}
+
+let banTargetId = null;
+let banTargetName = null;
+
+function openBanModal(id, name) {
+  banTargetId = id;
+  banTargetName = name;
+  document.getElementById('ban-user-name').textContent = name;
+  document.getElementById('ban-reason').value = '';
+  openModal('modal-ban-user');
+}
+
+async function confirmBanUser() {
+  const reason = document.getElementById('ban-reason').value.trim();
+  const res = await api(`/users/${banTargetId}/ban`, {
+    method: 'POST',
+    body: JSON.stringify(reason ? { reason } : {})
+  });
+  if (res && res.ok) {
+    toast(`Пользователь ${banTargetName} забанен`, 'success');
+    closeModal('modal-ban-user');
+    loadUsers();
+  } else if (res) {
+    const d = await res.json();
+    toast(d.detail || 'Ошибка бана', 'error');
+  }
+}
+
+async function unbanUser(id, name) {
+  if (!confirm(`Снять бан с «${name}»?`)) return;
+  const res = await api(`/users/${id}/unban`, { method: 'POST' });
+  if (res && res.ok) { toast(`Бан с ${name} снят`, 'success'); loadUsers(); }
+  else if (res) { const d = await res.json(); toast(d.detail || 'Ошибка', 'error'); }
 }
 
 function openEditUser(id, username, email) {
@@ -1413,6 +1532,146 @@ async function updateProfile() {
   } else if (res) {
     const d = await res.json();
     toast(d.detail || 'Ошибка', 'error');
+  }
+}
+
+// ===================== LOGS =====================
+let logsPage = 1;
+const logsSize = 20;
+let logsDebounceTimer = null;
+
+function debouncedLoadLogs() {
+  clearTimeout(logsDebounceTimer);
+  logsDebounceTimer = setTimeout(() => loadLogs(1), 400);
+}
+
+async function loadLogs(page) {
+  logsPage = page || logsPage;
+  const tbody = document.getElementById('logs-tbody');
+  tbody.innerHTML = '<tr><td colspan="7"><div class="loading-center"><div class="spinner"></div> Загрузка...</div></td></tr>';
+
+  const params = new URLSearchParams({ page: logsPage, size: logsSize });
+  const userId = document.getElementById('logs-filter-user').value.trim();
+  const method = document.getElementById('logs-filter-method').value;
+  const path = document.getElementById('logs-filter-path').value.trim();
+  const statusCode = document.getElementById('logs-filter-status').value.trim();
+  if (userId) params.set('user_id', userId);
+  if (method) params.set('method', method);
+  if (path) params.set('path', path);
+  if (statusCode) params.set('status_code', statusCode);
+
+  try {
+    const res = await api(`/admin/request-logs?${params.toString()}`);
+    if (!res || !res.ok) {
+      tbody.innerHTML = '<tr><td colspan="7" style="color:var(--red);padding:1rem;text-align:center">Нет доступа</td></tr>';
+      return;
+    }
+    const d = await res.json();
+    const items = d.items || [];
+    const total = d.total || 0;
+    const pages = Math.ceil(total / logsSize) || 1;
+    renderLogs(items);
+    renderLogsPagination(pages);
+  } catch {
+    tbody.innerHTML = '<tr><td colspan="7" style="color:var(--red);padding:1rem;text-align:center">Ошибка загрузки</td></tr>';
+  }
+}
+
+function renderLogs(items) {
+  const tbody = document.getElementById('logs-tbody');
+  if (items.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="7"><div class="empty-state"><div class="empty-icon">📜</div><div class="empty-title">Записей не найдено</div></div></td></tr>';
+    return;
+  }
+  tbody.innerHTML = items.map(l => `
+    <tr>
+      <td style="color:var(--text3);font-size:13px;white-space:nowrap">${fmtDateTime(l.created_at)}</td>
+      <td>${l.user_id != null ? `<span class="tag">#${l.user_id}</span>` : '<span style="color:var(--text3)">—</span>'}</td>
+      <td><span class="chip">${l.method}</span></td>
+      <td><span class="text-ellipsis" style="max-width:280px">${l.path}</span></td>
+      <td>${statusChip(l.status_code)}</td>
+      <td style="color:var(--text3)">${l.duration_ms != null ? l.duration_ms + 'мс' : '—'}</td>
+      <td style="color:var(--text3);font-size:13px">${l.ip_address || '—'}</td>
+    </tr>
+  `).join('');
+}
+
+function statusChip(code) {
+  let cls = 'badge-blue';
+  if (code >= 500) cls = 'badge-red';
+  else if (code >= 400) cls = 'badge-yellow';
+  else if (code >= 200 && code < 300) cls = 'badge-green';
+  return `<span class="badge ${cls}">${code}</span>`;
+}
+
+function fmtDateTime(dt) {
+  if (!dt) return '—';
+  try {
+    return new Date(dt).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' });
+  } catch { return dt; }
+}
+
+function renderLogsPagination(pages) {
+  let el = document.getElementById('logs-pagination');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'logs-pagination';
+    el.style.cssText = 'display:flex;gap:8px;align-items:center;justify-content:center;margin-top:1rem;';
+    document.getElementById('logs-tbody').closest('table').after(el);
+  }
+  if (pages <= 1) { el.innerHTML = ''; return; }
+  el.innerHTML = `
+    <button class="btn btn-secondary btn-sm" onclick="loadLogs(${logsPage - 1})" ${logsPage === 1 ? 'disabled' : ''}>← Назад</button>
+    <span style="color:var(--text2);font-size:14px">${logsPage} / ${pages}</span>
+    <button class="btn btn-secondary btn-sm" onclick="loadLogs(${logsPage + 1})" ${logsPage === pages ? 'disabled' : ''}>Вперёд →</button>
+  `;
+}
+
+async function deleteLogsByFilter() {
+  const userId = document.getElementById('logs-filter-user').value.trim();
+  const method = document.getElementById('logs-filter-method').value;
+  const path = document.getElementById('logs-filter-path').value.trim();
+  const statusCode = document.getElementById('logs-filter-status').value.trim();
+
+  if (!userId && !method && !path && !statusCode) {
+    if (!confirm('Фильтры не заданы — это удалит ВСЕ логи без исключения. Продолжить?')) return;
+  } else {
+    if (!confirm('Удалить все логи, подходящие под текущие фильтры?')) return;
+  }
+
+  const params = new URLSearchParams();
+  if (userId) params.set('user_id', userId);
+  if (method) params.set('method', method);
+  if (path) params.set('path', path);
+  if (statusCode) params.set('status_code', statusCode);
+
+  const res = await api(`/admin/request-logs?${params.toString()}`, { method: 'DELETE' });
+  if (res && res.ok) {
+    const d = await res.json();
+    toast(`Удалено записей: ${d.deleted}`, 'success');
+    loadLogs(1);
+  } else if (res) {
+    const d = await res.json();
+    toast(d.detail || 'Ошибка удаления', 'error');
+  }
+}
+
+async function deleteLogsOlderThan() {
+  const days = document.getElementById('logs-older-than').value.trim();
+  if (!days || isNaN(days) || Number(days) < 0) {
+    toast('Укажите корректное число дней', 'error');
+    return;
+  }
+  if (!confirm(`Удалить все логи старше ${days} дней?`)) return;
+
+  const res = await api(`/admin/request-logs?older_than_days=${days}`, { method: 'DELETE' });
+  if (res && res.ok) {
+    const d = await res.json();
+    toast(`Удалено записей: ${d.deleted}`, 'success');
+    loadLogs(1);
+  } else if (res) {
+    const d = await res.json();
+    toast(d.detail || 'Ошибка удаления', 'error');
   }
 }
 

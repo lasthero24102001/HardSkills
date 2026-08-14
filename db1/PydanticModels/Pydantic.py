@@ -33,18 +33,6 @@ class LoginRequest(BaseModel):
 class RefreshToken(BaseModel):
     refresh_token:str
 
-class AuditLogOut(BaseModel):
-    id: int
-    actor_id: Optional[int] = None
-    action: str
-    target_type: Optional[str] = None
-    target_id: Optional[int] = None
-    details: Optional[str] = None
-    ip_address: Optional[str] = None
-    created_at: Optional[datetime] = None
-
-    model_config = ConfigDict(from_attributes=True)
-
 class RefreshDBTokenOut(BaseModel):
     id:int
     token:str

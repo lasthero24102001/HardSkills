@@ -1,6 +1,6 @@
 from abc import ABC
 from datetime import datetime, timedelta
-from db1.models.Base1 import AuditLog, RequestLog
+from db1.models.Base1 import RequestLog
 from sqlalchemy import select,update,delete,func
 from sqlalchemy.orm import selectinload,joinedload
 
@@ -38,14 +38,6 @@ class UserRepository(BaseRepository):
         result = await self.db.execute(select(User).where(User.id == assignee_id))
         return result.scalars().first()
 
-class AuditLogRepository(BaseRepository):
-    async def get_all(self, actor_id: int | None = None, action: str | None = None):
-        query = select(AuditLog).order_by(AuditLog.created_at.desc())
-        if actor_id is not None:
-            query = query.where(AuditLog.actor_id == actor_id)
-        if action is not None:
-            query = query.where(AuditLog.action == action)
-        return query
 class RequestLogRepository(BaseRepository):
     def _apply_filters(self, query, user_id=None, method=None, path=None, status_code=None,
                         since: datetime | None = None, until: datetime | None = None):
