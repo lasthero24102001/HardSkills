@@ -3,7 +3,7 @@ from config import settings
 from datetime import datetime,timedelta,timezone
 from jose import jwt,JWTError
 
-from db1.exception.exceptions import InvalidTokenException, UserBanned
+from db1.exception.exceptions import InvalidTokenException, UserBanned,UserForbidden
 from db1.models.Base1 import RefreshTokenDB,User
 from db1.Security.security import Utils
 from fastapi import HTTPException, Depends,Request
@@ -38,10 +38,11 @@ async def delete_refresh_token(db:AsyncSession,user_id:int,refresh_token:str):
     raise HTTPException(status_code=404,detail="Refresh Token Not Found")
 async def validate_refresh_token(db:AsyncSession,user_id:int,refresh_token:str):
     result=await db.execute(select(RefreshTokenDB).where(RefreshTokenDB.user_id == user_id))
-    user=result.scalars().first()
-    if not user or not Utils.password_verify(refresh_token,user.token):
-        raise HTTPException(status_code=404,detail="Refresh Token Not Found")
-    return user
+    tokens=result.scalars().all()          # ← берёт ВСЕ сессии юзера
+    for token1 in tokens:
+        if Utils.password_verify(refresh_token,token1.token):
+            return token1
+    raise HTTPException(status_code=404,detail="Refresh Token Not Found")
 def decode_token(token:str):
     try:
         payload=jwt.decode(token,settings.SECRET_KEY,algorithms=[settings.ALGORITHM])
@@ -49,7 +50,7 @@ def decode_token(token:str):
             raise HTTPException(status_code=404,detail="Token is invalid")
         return payload
     except JWTError:
-        raise HTTPException(status_code=404,detail="Token is invalid")
+        raise InvalidTokenException()
 async def get_current_user(request:Request,db:AsyncSession=Depends(get_db)):
     try:
         token = request.cookies.get("access_token")
@@ -72,5 +73,5 @@ async def get_current_user(request:Request,db:AsyncSession=Depends(get_db)):
         raise InvalidTokenException()
 async def require_admin(current_user:User=Depends(get_current_user)):
     if current_user.role != "admin":
-        raise HTTPException(status_code=403,detail="You are not an admin")
+        raise UserForbidden()
     return current_user

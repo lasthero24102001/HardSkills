@@ -440,7 +440,7 @@ class TaskService(BaseService,CreateService):
         user=await self.user_repo.user_task_assignee_id(task_in.assignee_id)
         if not user:
             raise UserNotFound()
-        new_task=Task(title=task_in.title,project_id=task_in.project_id,assignee_id=task_in.assignee_id or self.policy.user.id,created_at=task_in.created_at)
+        new_task=Task(title=task_in.title,project_id=task_in.project_id,assignee_id=task_in.assignee_id or self.policy.user.id,created_at=task_in.created_at,description=task_in.description)
         self.db.add(new_task)
         await self.db.commit()
         await self.db.refresh(new_task)
@@ -460,6 +460,10 @@ class TaskService(BaseService,CreateService):
             task.title=task_in.title
         if task_in.created_at is not None:
             task.created_at=task_in.created_at
+        if task_in.description is not None:
+            task.description=task_in.description
+        if task_in.status is not None:
+            task.status = task_in.status
         await self.db.commit()
         await self.redis.delete(f'task:{task_id}')
         await self.db.refresh(task)

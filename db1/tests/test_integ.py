@@ -6,6 +6,8 @@ import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
 from main import app
 from db1.Database.database import async_factory
+from config import settings
+from scripts.create_admin import create_admin
 from db1.models.Base1 import Base
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
@@ -13,10 +15,9 @@ from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 @pytest_asyncio.fixture
 async def client():
     redis_client = await redis.from_url(
-        "redis://localhost:6380/1",
+        f"{settings.REDIS_URL}/1",
         decode_responses=True
     )
-
     # очищаем ДО теста
     await redis_client.flushdb()
 
@@ -40,15 +41,11 @@ async def clean_db():
         ))
         await db.commit()
 # fixture для авторизации
+
 @pytest_asyncio.fixture
 async def auth_headers(client):
-    # регистрируем пользователя
-    await client.post("/users/register", json={
-        "username": "testadmin",
-        "password": "123456",
-        "email": "admin@test.com",
-        "role": "admin"
-    })
+    # создаём админа напрямую в БД тем же способом, что и в проде (bootstrap-скрипт)
+    await create_admin(username="testadmin", email="admin@test.com", password="123456")
     # логинимся
     response = await client.post("/users/login", json={
         "username": "testadmin",
